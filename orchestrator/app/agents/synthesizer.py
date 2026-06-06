@@ -1,18 +1,27 @@
-"""Synthesizer — turns N completed researcher findings into a ranked pick.
+"""Synthesizer — turns N completed researcher findings into a HOLISTIC shop
+recommendation, not a ranked list.
 
-One Gemini call (gemini-2.5-pro by default) reads the user's spec plus every
-finished researcher_findings row, then produces a recommendation row with:
+The earlier version just produced a single rationale + alternatives list,
+which was indistinguishable from a Google Shopping top-N. This one produces:
 
-  * ``ranked_candidate_ids``  ordered best → worst, only including the ones
-    worth showing.
-  * ``rationale``             short markdown explaining *why* the top pick
-    wins for THIS user — referencing their spec.
-  * ``alternatives``          adjacent buys the user might also consider
-    (cheaper variant, refurbished path, "if you can wait" angle, etc.).
+  * ``picks``      one-liner per ranked candidate so each tile renders WHY
+                    it's worth showing (not just price + condition).
+  * ``tradeoffs``  axis-by-axis "if you optimize for X, pick Y" insights —
+                    price vs. return policy vs. shipping vs. seller trust.
+                    This is the part that makes it a shopping ADVISOR rather
+                    than a sorted list.
+  * ``warnings``   honest concerns surfaced front-and-center: no returns,
+                    thin seller history, variant mismatches, ships from
+                    overseas, etc.
+  * ``rationale``  short markdown explaining why the top pick wins for
+                    THIS user given their stated spec (referenced
+                    explicitly, not assumed).
+  * ``alternatives`` adjacent paths worth considering — cheaper variant,
+                    refurb route, "if you can wait" angle.
 
-JSON-as-text output is parsed defensively — same reason as the researcher
-extraction step (response_mime_type='application/json' can't combine with
-tools, and pro models occasionally wrap output in code fences).
+JSON-as-text output is parsed defensively because Gemini's response_schema
+mode conflicts with tool use, and pro models occasionally wrap output in
+code fences.
 """
 
 from __future__ import annotations
@@ -36,42 +45,74 @@ class Alternative(BaseModel):
     why_consider: str
 
 
-class RankedPick(BaseModel):
+class CandidateNote(BaseModel):
     candidate_id: str
     score: int  # 0-100
-    reason: str
+    one_liner: str  # surfaced on the tile
+    detail: str | None = None  # surfaced when expanded
+
+
+class TradeoffInsight(BaseModel):
+    axis: str  # e.g. "price", "return policy", "seller trust"
+    winner_candidate_id: str | None = None
+    summary: str
 
 
 class SynthOutput(BaseModel):
     top_pick_candidate_id: str | None = None
     rationale: str = ""
-    ranked: list[RankedPick] = []
+    picks: list[CandidateNote] = []
+    tradeoffs: list[TradeoffInsight] = []
+    warnings: list[str] = []
     alternatives: list[Alternative] = []
 
 
 SYSTEM_PROMPT = """You are the final stage of a personal shopping pipeline.
+Your job is to make this feel like a shopping ADVISOR, not a sorted product
+grid the user could have generated themselves with Google Shopping.
 
 You receive: (1) the user's structured shopping spec, and (2) a JSON array of
-researcher findings — one per candidate listing the prior agents found and
-inspected. Each finding has: candidate_id, title, source (retailer domain),
-source_url, price_cents (if known), condition, seller, shipping, returns,
-known_issues, scam_score, scam_reasons, and seller_rep.
+researcher findings — one per candidate listing. Each finding has:
+candidate_id, title, source (retailer domain), source_url, price_cents,
+condition, seller, shipping fields, return_policy, known_issues, scam_score,
+scam_reasons, and seller_rep.
 
-Your job is to recommend the SINGLE best candidate for this user and explain
-why in plain English. Then list 1-3 alternative options the user might also
-consider — these can be:
-  * a cheaper variant if the budget is tight
-  * a more reliable seller if the top pick has any scam signal
-  * a refurbished path if the user picked "used"
-  * a different storage / color tier worth knowing about
+You produce a structured recommendation with four kinds of analysis:
+
+1. PICKS — for every candidate you'd show the user, write one short line
+   (≤ 18 words) explaining why this listing is on screen. Reference a
+   concrete trait the user cares about ("cheapest US-based option",
+   "only one with a 1-year warranty", "best return policy for $50 more").
+   Skip candidates that are clearly junk.
+
+2. TRADEOFFS — by axis, surface WHO wins and WHY. Required axes when
+   the data supports them: price, return_policy, shipping_speed,
+   seller_trust. Add others if relevant (warranty, condition,
+   variant_match). Each tradeoff is one sentence that names the winner.
+
+3. WARNINGS — honest concerns the user should hear before clicking buy.
+   Examples: "Listing 2 has no returns — risky for a used phone",
+   "Listing 4 is the 128GB variant; you wanted 256GB", "All US listings
+   are $50+ more than overseas — your deal-breaker is genuine cost."
+
+4. RATIONALE for the top pick — 2–3 short sentences. Cite the user's
+   ACTUAL deal_breakers / must_haves, not generic shopping wisdom.
+   Conclude with what they're trading off by picking this one.
+
+Plus ALTERNATIVES: 1–3 adjacent shopping ideas (cheaper variant, refurb
+path, "wait for a sale", different storage tier) the user might also
+consider. Each is one sentence.
 
 Rules:
-  * Only recommend from the candidate list — never invent a listing.
-  * If a candidate has scam_score ≥ 40, you may still rank it but explain
-    the risk in its `reason`. Prefer safer picks for the top spot.
-  * Reference the user's actual deal_breakers and must_haves in the rationale.
-  * Keep rationale ≤ 3 short sentences.
-  * Each alternative.why_consider is one sentence."""
+  * Only recommend candidates from the input list — never invent listings.
+  * If a candidate has scam_score ≥ 40 or its variant doesn't match the
+    spec (e.g. 128GB when user wants 256GB), say so explicitly in
+    warnings AND in its pick one_liner. Don't quietly downrank.
+  * Be SPECIFIC. "Good seller" is useless; "Verified seller with 4,127
+    feedback at 99.6%" is useful. Use the actual numbers from findings.
+  * Reference the user's spec by its actual content. They told you their
+    budget — quote it. They told you their must_haves — verify each.
+  * Keep total output under ~600 words. Brevity is part of holistic."""
 
 
 _JSON_INSTRUCTION = """Return ONE raw JSON object — no prose, no fences:
@@ -79,17 +120,23 @@ _JSON_INSTRUCTION = """Return ONE raw JSON object — no prose, no fences:
 {
   "top_pick_candidate_id": string,
   "rationale": string,
-  "ranked": [
-    {"candidate_id": string, "score": integer (0-100), "reason": string}
+  "picks": [
+    {"candidate_id": string, "score": integer (0-100),
+     "one_liner": string, "detail": string|null}
   ],
+  "tradeoffs": [
+    {"axis": string, "winner_candidate_id": string|null, "summary": string}
+  ],
+  "warnings": [string],
   "alternatives": [
     {"title": string, "why_consider": string}
   ]
 }
 
-top_pick_candidate_id MUST be one of the candidate_id values from the input
-findings. ranked should include every candidate worth showing, sorted by
-descending score. alternatives can be empty if nothing useful applies."""
+top_pick_candidate_id MUST be one of the candidate_id values from the input.
+picks should include every candidate worth showing, sorted by descending
+score. winner_candidate_id in tradeoffs MUST also be from the input or null.
+warnings and alternatives can be empty if nothing useful applies."""
 
 
 def _strip_code_fence(text: str) -> str:
@@ -182,7 +229,7 @@ async def run_synthesizer(
             contents=user_msg,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
-                max_output_tokens=2048,
+                max_output_tokens=4096,
             ),
         )
     except Exception as e:
@@ -192,17 +239,17 @@ async def run_synthesizer(
     text = _strip_code_fence(resp.text or "")
     data = _coerce_json_object(text)
     if data is None:
-        log.warning("synthesizer: could not parse JSON; text=%r", text[:200])
+        log.warning("synthesizer: could not parse JSON; text=%r", text[:300])
         return SynthOutput()
     try:
         result = SynthOutput(**data)
     except Exception as e:
-        log.warning("synthesizer: schema validation failed: %s", e)
+        log.warning("synthesizer: schema validation failed: %s; payload=%s", e, list(data.keys()))
         return SynthOutput()
 
-    # Persist into recommendations — the trigger publishes
-    # recommendation.created to the realtime channel.
-    ranked_ids = [r.candidate_id for r in result.ranked] or (
+    # Build ranked_candidate_ids in pick order so the dashboard renders them
+    # consistently with the synth's intended ranking.
+    ranked_ids = [p.candidate_id for p in result.picks] or (
         [result.top_pick_candidate_id] if result.top_pick_candidate_id else []
     )
     await client.insert(
@@ -212,11 +259,17 @@ async def run_synthesizer(
             "ranked_candidate_ids": ranked_ids,
             "rationale": result.rationale,
             "alternatives": [a.model_dump() for a in result.alternatives],
+            "picks": [p.model_dump() for p in result.picks],
+            "tradeoffs": [t.model_dump() for t in result.tradeoffs],
+            "warnings": result.warnings,
         },
     )
     log.info(
-        "synthesizer: wrote recommendation top=%s alt=%d",
+        "synthesizer: wrote rec top=%s picks=%d tradeoffs=%d warnings=%d alt=%d",
         result.top_pick_candidate_id,
+        len(result.picks),
+        len(result.tradeoffs),
+        len(result.warnings),
         len(result.alternatives),
     )
     return result

@@ -6,6 +6,7 @@ import {
   imgProxy,
   isConfigured,
   type Alternative,
+  type CandidatePick,
   type CandidateRow,
   type ClarifyingTurn,
   type FindingRow,
@@ -141,7 +142,12 @@ export default function IntentDashboard({ intentId }: Props) {
           rec={rec}
           candidate={topPick}
           finding={topPickFinding}
+          candidates={candidates}
         />
+      )}
+
+      {rec && rec.warnings && rec.warnings.length > 0 && (
+        <WarningsBanner warnings={rec.warnings} />
       )}
 
       <section className="mt-8">
@@ -168,6 +174,7 @@ export default function IntentDashboard({ intentId }: Props) {
                   candidate={c}
                   finding={findingByCandidate[c.id]}
                   isTopPick={topPickId === c.id}
+                  pick={rec?.picks?.find((p) => p.candidate_id === c.id)}
                 />
               ))}
         </div>
@@ -188,10 +195,12 @@ function CandidateTile({
   candidate,
   finding,
   isTopPick,
+  pick,
 }: {
   candidate: CandidateRow;
   finding?: FindingRow;
   isTopPick: boolean;
+  pick?: CandidatePick;
 }) {
   const f = finding?.finding;
   const price = f?.price_cents ?? candidate.raw_price_cents ?? null;
@@ -255,6 +264,13 @@ function CandidateTile({
         )}
       </div>
 
+      {pick?.one_liner && (
+        <p className="mt-2 rounded-md bg-neutral-50 px-2.5 py-1.5 text-xs leading-snug text-neutral-800">
+          <span className="font-medium text-neutral-900">Why shown:</span>{" "}
+          {pick.one_liner}
+        </p>
+      )}
+
       {f?.description_summary && (
         <p className="mt-2 line-clamp-3 text-xs text-neutral-600">
           {f.description_summary}
@@ -310,10 +326,12 @@ function TopPickPanel({
   rec,
   candidate,
   finding,
+  candidates,
 }: {
   rec: RecommendationRow;
   candidate: CandidateRow;
   finding?: FindingRow;
+  candidates: Record<string, CandidateRow>;
 }) {
   const f = finding?.finding;
   const price = f?.price_cents ?? candidate.raw_price_cents ?? null;
@@ -368,6 +386,54 @@ function TopPickPanel({
           </div>
         </div>
       </div>
+
+      {rec.tradeoffs && rec.tradeoffs.length > 0 && (
+        <div className="mt-5 border-t border-emerald-200 pt-4">
+          <div className="mb-2 text-xs font-medium uppercase tracking-wider text-emerald-800">
+            Tradeoffs
+          </div>
+          <ul className="space-y-1.5 text-sm text-neutral-800">
+            {rec.tradeoffs.map((t, i) => {
+              const winner = t.winner_candidate_id
+                ? candidates[t.winner_candidate_id]
+                : null;
+              return (
+                <li key={i} className="flex items-start gap-2">
+                  <span className="mt-0.5 shrink-0 rounded bg-white px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-800">
+                    {t.axis}
+                  </span>
+                  <span>
+                    {t.summary}
+                    {winner && (
+                      <span className="ml-1 text-neutral-500">
+                        → {winner.source}
+                      </span>
+                    )}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function WarningsBanner({ warnings }: { warnings: string[] }) {
+  return (
+    <section className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4">
+      <div className="mb-2 text-xs font-medium uppercase tracking-wider text-amber-900">
+        Honest concerns
+      </div>
+      <ul className="space-y-1 text-sm text-amber-900">
+        {warnings.map((w, i) => (
+          <li key={i} className="flex gap-2">
+            <span className="select-none">⚠️</span>
+            <span>{w}</span>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

@@ -87,11 +87,27 @@ export type FindingPayload = {
 
 export type Alternative = { title: string; why_consider: string };
 
+export type CandidatePick = {
+  candidate_id: string;
+  score: number;
+  one_liner: string;
+  detail?: string | null;
+};
+
+export type TradeoffInsight = {
+  axis: string;
+  winner_candidate_id?: string | null;
+  summary: string;
+};
+
 export type RecommendationRow = {
   id: string;
   intent_id: string;
   ranked_candidate_ids: string[];
   rationale: string;
   alternatives: Alternative[];
+  picks: CandidatePick[];
+  tradeoffs: TradeoffInsight[];
+  warnings: string[];
   generated_at: string;
 };

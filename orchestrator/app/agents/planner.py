@@ -66,8 +66,65 @@ retailer-scoped queries (e.g. "site:ebay.com <product>", "site:swappa.com
 <product>") matching the user's retailer preferences if any. Prefer retailer
 product pages over reviews, articles, or social media.
 
+CRITICAL: Honor the spec's deal_breakers strictly. If the user said anything
+like "US-based seller" or "ships from the US", restrict your queries to US
+retailers — append `site:.com OR site:.us` or `"ships from United States"`
+to broaden away from foreign listings. Never return links from .com.my,
+.com.au, .co.uk, .de, .fr, .es, .it, .nl, .ca etc. when a US-only
+constraint applies. The dashboard will hard-filter these afterward; you
+help by not surfacing them in the first place.
+
 You do not need to write any prose response. Just run the searches; we read
 the grounding metadata directly. Be efficient with searches."""
+
+
+# Country TLDs we drop when a US-only constraint is detected in the spec.
+_FOREIGN_TLDS = (
+    ".my", ".au", ".uk", ".de", ".fr", ".es", ".it", ".nl", ".ca",
+    ".jp", ".kr", ".cn", ".hk", ".sg", ".id", ".th", ".vn", ".ph",
+    ".br", ".mx", ".ar", ".ie", ".pl", ".se", ".no", ".fi", ".dk",
+    ".be", ".at", ".ch", ".cz", ".tr", ".gr", ".pt", ".ru", ".za",
+    ".nz", ".ae", ".sa", ".il", ".eg",
+)
+
+# Multi-segment country suffixes that .endswith() catches as a whole.
+_FOREIGN_SUFFIXES = (
+    ".com.my", ".com.au", ".co.uk", ".com.sg", ".com.hk", ".com.ph",
+    ".com.br", ".com.mx", ".co.id", ".co.in", ".co.jp", ".co.kr",
+    ".co.nz", ".co.za", ".com.tw", ".com.tr",
+)
+
+
+def _us_only_constraint(spec: dict[str, Any]) -> bool:
+    """True if the spec's deal_breakers/notes hint at a US-only requirement."""
+    haystack = " ".join(
+        [
+            *(spec.get("deal_breakers") or []),
+            *(spec.get("must_haves") or []),
+            spec.get("notes") or "",
+            spec.get("raw_query") or "",
+        ]
+    ).lower()
+    if not haystack:
+        return False
+    return any(
+        tok in haystack
+        for tok in ("us-based", "us based", "united states", "ships from us", "u.s.")
+    )
+
+
+def _passes_region_filter(url: str, us_only: bool) -> bool:
+    if not us_only:
+        return True
+    host = (urlparse(url).hostname or "").lower()
+    if not host:
+        return True
+    if any(host.endswith(s) for s in _FOREIGN_SUFFIXES):
+        return False
+    last_dot = host.rfind(".")
+    if last_dot != -1 and host[last_dot:] in _FOREIGN_TLDS:
+        return False
+    return True
 
 
 @dataclass
@@ -156,13 +213,18 @@ async def run_planner(intent_id: str, spec: dict[str, Any]) -> list[CandidateDra
     # real retailer URL (not a one-time-use vertexai redirect).
     resolved = await _resolve_grounding_redirects(raw)
 
+    us_only = _us_only_constraint(spec)
     seen: set[str] = set()
     drafts: list[CandidateDraft] = []
+    rejected_foreign = 0
     for url, title in resolved:
         if url in seen:
             continue
         seen.add(url)
         if not _is_product_url(url):
+            continue
+        if not _passes_region_filter(url, us_only):
+            rejected_foreign += 1
             continue
         drafts.append(
             CandidateDraft(
@@ -174,7 +236,12 @@ async def run_planner(intent_id: str, spec: dict[str, Any]) -> list[CandidateDra
         if len(drafts) >= MAX_CANDIDATES:
             break
 
-    log.info("planner: %d candidates after filtering", len(drafts))
+    log.info(
+        "planner: %d candidates after filtering (us_only=%s, rejected_foreign=%d)",
+        len(drafts),
+        us_only,
+        rejected_foreign,
+    )
     return drafts
 
 
