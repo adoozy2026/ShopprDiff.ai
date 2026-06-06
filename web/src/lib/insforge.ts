@@ -12,10 +12,12 @@ export function isConfigured(): boolean {
   return Boolean(baseUrl) && Boolean(anonKey);
 }
 
-// --- Domain types: mirror db/migrations/<ts>_init.sql ---
+// --- Domain types: mirror migrations/<ts>_init.sql ---
 export type IntentStatus = "eliciting" | "ready" | "researching" | "done" | "error";
 export type CandidateStatus = "queued" | "researching" | "done" | "rejected" | "error";
 export type FindingStatus = "queued" | "running" | "done" | "error";
+
+export type ClarifyingTurn = { role: "user" | "assistant"; text: string };
 
 export type IntentRow = {
   id: string;
@@ -23,7 +25,7 @@ export type IntentRow = {
   raw_query: string;
   spec: Record<string, unknown>;
   status: IntentStatus;
-  clarifying_turns: unknown[];
+  clarifying_turns: ClarifyingTurn[];
   updated_at: string;
 };
 

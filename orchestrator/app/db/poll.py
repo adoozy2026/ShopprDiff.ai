@@ -4,21 +4,21 @@ from datetime import datetime, timezone
 
 from app.config import settings
 from app.db.client import InsforgeClient, InsforgeError
+from app.orchestrator import handle_intent
 
 log = logging.getLogger(__name__)
 
 
-async def _handle_intent(intent: dict) -> None:
-    # TODO(h4-h7): hand off to intake / search-planner / researcher pipeline
-    log.info("intent picked up: id=%s spec_keys=%s", intent.get("id"), list((intent.get("spec") or {}).keys()))
-
-
 async def intent_poller_task() -> None:
-    """Polls Insforge for ready intents and dispatches them.
+    """Polls Insforge for unclaimed actionable intents and dispatches them.
 
     Insforge does not expose direct Postgres access, so we cannot LISTEN/NOTIFY.
-    We mark each intent with picked_up_at to claim it; the WHERE clause filters
-    those out so concurrent pollers (if any) don't double-process.
+    We mark each intent with ``picked_up_at`` to claim it; the WHERE clause
+    filters those out so concurrent pollers (if any) don't double-process.
+
+    Actionable statuses:
+      * ``eliciting`` — intake hasn't finalized the spec yet
+      * ``ready``    — spec is set; planner should run
     """
     try:
         client = InsforgeClient()
@@ -32,7 +32,7 @@ async def intent_poller_task() -> None:
             rows = await client.select(
                 "intents",
                 {
-                    "status": "eq.ready",
+                    "status": "in.(eliciting,ready)",
                     "picked_up_at": "is.null",
                     "order": "created_at.asc",
                     "limit": "5",
@@ -42,14 +42,11 @@ async def intent_poller_task() -> None:
                 claimed = await client.update(
                     "intents",
                     where={"id": f"eq.{row['id']}", "picked_up_at": "is.null"},
-                    patch={
-                        "status": "researching",
-                        "picked_up_at": datetime.now(timezone.utc).isoformat(),
-                    },
+                    patch={"picked_up_at": datetime.now(timezone.utc).isoformat()},
                 )
                 if not claimed:
                     continue  # another worker beat us; skip
-                asyncio.create_task(_handle_intent(claimed[0]))
+                asyncio.create_task(handle_intent(claimed[0]))
             backoff = 1.0
         except asyncio.CancelledError:
             await client.close()

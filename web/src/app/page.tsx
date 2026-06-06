@@ -35,9 +35,10 @@ export default function Home() {
         .insert({
           session_id: sessions[0].id,
           raw_query: q,
-          // Intake agent will flip this to 'ready' once it has enough info.
-          // For the H0 skeleton we mark it ready immediately so the poller picks it up.
-          status: "ready",
+          // Intake agent runs while status='eliciting'. It either asks one
+          // clarifying question or flips to 'ready' if it has enough info.
+          status: "eliciting",
+          clarifying_turns: [{ role: "user", text: q }],
         })
         .select();
       if (iErr || !intents?.[0]) throw iErr ?? new Error("intent insert failed");
