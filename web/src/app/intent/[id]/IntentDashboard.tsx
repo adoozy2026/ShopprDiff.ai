@@ -130,7 +130,7 @@ export default function IntentDashboard({ intentId }: Props) {
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
-      <header className="flex items-baseline justify-between gap-4 border-b border-neutral-200 pb-4">
+      <header className="flex items-start justify-between gap-4 border-b border-neutral-200 pb-4">
         <UserPromptSection intent={intent} />
         <div className="shrink-0 rounded-full bg-neutral-100 px-3 py-1 text-xs text-neutral-700">
           status: <span className="font-mono">{intent?.status ?? "loading"}</span>
@@ -460,95 +460,153 @@ function AlternativesSection({ alternatives }: { alternatives: Alternative[] }) 
 }
 
 function UserPromptSection({ intent }: { intent: IntentRow | null }) {
-  const [editing, setEditing] = useState(false);
+  const [refining, setRefining] = useState(false);
   const [draft, setDraft] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  function startEditing() {
-    setDraft(intent?.raw_query ?? "");
+  const turns = intent?.clarifying_turns ?? [];
+  // Refinements = all user turns after the first (index 0 is the original prompt).
+  const refinements = turns.filter((t, i) => i > 0 && t.role === "user");
+
+  function openRefine() {
+    setDraft("");
     setErr(null);
-    setEditing(true);
+    setRefining(true);
   }
 
-  function cancelEditing() {
-    setEditing(false);
+  function cancelRefine() {
+    setRefining(false);
     setErr(null);
   }
 
-  async function save(e: React.FormEvent) {
+  async function submitRefinement(e: React.FormEvent) {
     e.preventDefault();
-    if (!intent || !draft.trim() || saving) return;
-    setSaving(true);
+    if (!intent || !draft.trim() || busy) return;
+    setBusy(true);
     setErr(null);
     try {
-      // Re-run the agent pipeline with the refined prompt: reset the intake
-      // conversation and hand the intent back to the dispatcher (see page.tsx).
-      const nextTurns: ClarifyingTurn[] = [{ role: "user", text: draft.trim() }];
+      const nextTurns: ClarifyingTurn[] = [
+        ...turns,
+        { role: "user", text: draft.trim() },
+      ];
       const { error } = await insforge.database
         .from("intents")
         .update({
-          raw_query: draft.trim(),
           clarifying_turns: nextTurns,
           status: "eliciting",
           picked_up_at: null,
         })
         .eq("id", intent.id);
       if (error) throw error;
-      setEditing(false);
+      setDraft("");
+      setRefining(false);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
-      setSaving(false);
+      setBusy(false);
+    }
+  }
+
+  async function undoRefinement(text: string) {
+    if (!intent || busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      // Remove the first matching user turn with this text (after index 0).
+      let removed = false;
+      const nextTurns = turns.filter((t, i) => {
+        if (!removed && i > 0 && t.role === "user" && t.text === text) {
+          removed = true;
+          return false;
+        }
+        return true;
+      });
+      const { error } = await insforge.database
+        .from("intents")
+        .update({
+          clarifying_turns: nextTurns,
+          status: "eliciting",
+          picked_up_at: null,
+        })
+        .eq("id", intent.id);
+      if (error) throw error;
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
   return (
     <div className="min-w-0 flex-1">
       <div className="text-xs uppercase tracking-wider text-neutral-500">User Prompt</div>
-      {editing ? (
-        <form onSubmit={save} className="mt-1">
+      <div className="mt-1 flex items-start gap-3">
+        <h1 className="text-xl font-semibold">
+          {intent?.raw_query || "Shopping in progress"}
+        </h1>
+        {intent && !refining && (
+          <button
+            type="button"
+            onClick={openRefine}
+            className="mt-0.5 shrink-0 rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+          >
+            Refine search
+          </button>
+        )}
+      </div>
+
+      {refinements.length > 0 && (
+        <ul className="mt-3 space-y-1">
+          {refinements.map((r, i) => (
+            <li
+              key={i}
+              className="flex items-center gap-2 rounded-md bg-neutral-50 px-3 py-1.5 text-sm text-neutral-800"
+            >
+              <span className="flex-1">{r.text}</span>
+              <button
+                type="button"
+                onClick={() => undoRefinement(r.text)}
+                disabled={busy}
+                className="shrink-0 text-xs text-neutral-500 underline hover:text-neutral-900 disabled:opacity-50"
+              >
+                Undo
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {refining && (
+        <form onSubmit={submitRefinement} className="mt-3">
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            rows={3}
+            rows={2}
+            placeholder="Add details to refine your search…"
             className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 outline-none focus:border-neutral-900"
             autoFocus
           />
           <div className="mt-2 flex gap-2">
             <button
               type="submit"
-              disabled={saving || !draft.trim()}
+              disabled={busy || !draft.trim()}
               className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
             >
-              {saving ? "Saving…" : "Save"}
+              {busy ? "Submitting…" : "Submit"}
             </button>
             <button
               type="button"
-              onClick={cancelEditing}
-              disabled={saving}
+              onClick={cancelRefine}
+              disabled={busy}
               className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 disabled:opacity-50"
             >
               Cancel
             </button>
           </div>
         </form>
-      ) : (
-        <div className="mt-1 flex items-start gap-3">
-          <h1 className="text-xl font-semibold">
-            {intent?.raw_query || "Shopping in progress"}
-          </h1>
-          {intent && (
-            <button
-              type="button"
-              onClick={startEditing}
-              className="mt-0.5 shrink-0 rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
-            >
-              Refine search
-            </button>
-          )}
-        </div>
       )}
+
       {err && <p className="mt-2 text-xs text-red-700">{err}</p>}
     </div>
   );
