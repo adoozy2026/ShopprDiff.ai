@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     # --- Google AI Studio (Gemini) ---
     google_api_key: str = ""
-    gemini_model_researcher: str = "gemini-2.5-flash"
+    gemini_model_researcher: str = "gemini-2.5-flash-lite"
     gemini_model_synthesizer: str = "gemini-2.5-pro"
 
     # --- Runtime ---

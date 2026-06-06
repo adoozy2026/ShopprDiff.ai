@@ -29,7 +29,7 @@ from app.tools.sources import GOOGLE_SEARCH_TOOL
 
 log = logging.getLogger(__name__)
 
-MAX_CANDIDATES = 8
+MAX_CANDIDATES = 4
 
 # Gemini wraps every grounded URL in a one-time-use redirect under this host.
 # We resolve them to the real retailer URL before persisting so the dashboard

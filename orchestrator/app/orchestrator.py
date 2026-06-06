@@ -7,7 +7,7 @@ Called from the poller per claimed intent. Drives the state machine:
                                               can answer)
     eliciting  --intake.ready--> ready (chained inline)
     ready      --planner-->      researching (candidates inserted)
-    researching                  (handed off to researchers in H7-H11)
+    researching --researchers->  done (N parallel researchers populated findings)
 
 Anything raised inside this function is logged + we flip the intent to 'error'
 so the user sees the failure rather than a stuck spinner.
@@ -20,6 +20,7 @@ from typing import Any
 
 from app.agents.intake import run_intake
 from app.agents.planner import run_planner
+from app.agents.researcher import run_all_researchers
 from app.db.client import InsforgeClient
 
 log = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ async def handle_intent(intent: dict[str, Any]) -> None:
         try:
             await _stage_eliciting(client, intent)
             await _stage_ready(client, intent_id)
+            await _stage_researching(client, intent_id)
         except Exception as e:
             log.exception("handle_intent failed: intent_id=%s", intent_id)
             await _set_error(client, intent_id, repr(e))
@@ -136,3 +138,37 @@ async def _stage_ready(client: InsforgeClient, intent_id: str) -> None:
         where={"id": f"eq.{intent_id}"},
         patch={"status": "researching"},
     )
+
+
+async def _stage_researching(client: InsforgeClient, intent_id: str) -> None:
+    """If status=researching, fan out per-candidate researchers and wait."""
+    rows = await client.select("intents", {"id": f"eq.{intent_id}"})
+    if not rows or rows[0].get("status") != "researching":
+        return
+    intent = rows[0]
+    spec = intent.get("spec") or {}
+
+    candidates = await client.select(
+        "candidates",
+        {
+            "intent_id": f"eq.{intent_id}",
+            "status": "in.(queued,researching)",
+            "order": "created_at.asc",
+        },
+    )
+    if not candidates:
+        log.info("researching: no candidates to dispatch for %s", intent_id)
+        await client.update(
+            "intents",
+            where={"id": f"eq.{intent_id}"},
+            patch={"status": "done"},
+        )
+        return
+
+    await run_all_researchers(client, candidates, spec)
+    await client.update(
+        "intents",
+        where={"id": f"eq.{intent_id}"},
+        patch={"status": "done"},
+    )
+    log.info("researching complete for intent %s (%d candidates)", intent_id, len(candidates))
