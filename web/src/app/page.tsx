@@ -61,12 +61,21 @@ const EXAMPLE_GROUPS: { label: string; terms: string[] }[] = [
       "eco-friendly / sustainable",
     ],
   },
+  {
+    label: "Match scope",
+    terms: [
+      "exact item only",
+      "exact brand only",
+      "include comparable products",
+      "show similar alternatives",
+      "any brand is fine",
+    ],
+  },
 ];
 
 export default function Home() {
   const [q, setQ] = useState("");
   const [usedTerms, setUsedTerms] = useState<string[]>([]);
-  const [comparable, setComparable] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const router = useRouter();
@@ -81,21 +90,13 @@ export default function Home() {
     setUsedTerms((prev) => [...prev, term]);
   }
 
-  function buildQuery() {
-    const base = q.trim();
-    const note = comparable
-      ? "Also find comparable items."
-      : "Do not include comparable items; focus only on the exact item described.";
-    return base ? `${base}\n\n${note}` : note;
-  }
-
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!q.trim() || submitting) return;
     setSubmitting(true);
     setErr(null);
 
-    const query = buildQuery();
+    const query = q.trim();
 
     if (!isConfigured()) {
       // Skeleton mode: route to the dashboard with a fake id so we can still
@@ -155,11 +156,26 @@ export default function Home() {
           className="w-full rounded-lg border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 placeholder:text-neutral-400 shadow-sm outline-none focus:border-neutral-900"
         />
 
+        <button
+          type="submit"
+          disabled={submitting || !q.trim()}
+          className="w-full rounded-lg bg-neutral-900 px-4 py-3 text-sm font-medium text-white shadow-sm transition hover:bg-neutral-800 disabled:opacity-50"
+        >
+          {submitting ? "Starting…" : "Start shopping"}
+        </button>
+
         {hasRemainingTerms && (
           <div className="space-y-3">
-            <p className="text-xs font-medium text-neutral-500">
-              Add a preference (click to append):
-            </p>
+            <div>
+              <p className="text-xs font-medium text-neutral-500">
+                Add a preference (click to append):
+              </p>
+              <p className="mt-0.5 text-xs text-neutral-400">
+                These are all optional shortcuts for common criteria — feel free
+                to skip them and type anything that matters to you directly into
+                the prompt above.
+              </p>
+            </div>
             {EXAMPLE_GROUPS.map((group) => {
               const terms = group.terms.filter((t) => !usedTerms.includes(t));
               if (terms.length === 0) return null;
@@ -185,24 +201,6 @@ export default function Home() {
             })}
           </div>
         )}
-
-        <label className="flex items-center gap-2 text-sm text-neutral-700 select-none">
-          <input
-            type="checkbox"
-            checked={comparable}
-            onChange={(e) => setComparable(e.target.checked)}
-            className="h-4 w-4 rounded border-neutral-300 text-neutral-900 focus:ring-neutral-900"
-          />
-          Find comparable items
-        </label>
-
-        <button
-          type="submit"
-          disabled={submitting || !q.trim()}
-          className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-        >
-          {submitting ? "Starting…" : "Start shopping"}
-        </button>
       </form>
 
       {!isConfigured() && (
