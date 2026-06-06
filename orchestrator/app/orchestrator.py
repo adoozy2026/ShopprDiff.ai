@@ -21,6 +21,7 @@ from typing import Any
 from app.agents.intake import run_intake
 from app.agents.planner import run_planner
 from app.agents.researcher import run_all_researchers
+from app.agents.synthesizer import run_synthesizer
 from app.db.client import InsforgeClient
 
 log = logging.getLogger(__name__)
@@ -166,9 +167,34 @@ async def _stage_researching(client: InsforgeClient, intent_id: str) -> None:
         return
 
     await run_all_researchers(client, candidates, spec)
+    log.info("researching complete for intent %s (%d candidates)", intent_id, len(candidates))
+
+    # Synthesize a recommendation from the completed findings before flipping
+    # the intent to 'done' so the dashboard receives the rec in the same flow.
+    await _stage_synthesizing(client, intent_id, spec)
+
     await client.update(
         "intents",
         where={"id": f"eq.{intent_id}"},
         patch={"status": "done"},
     )
-    log.info("researching complete for intent %s (%d candidates)", intent_id, len(candidates))
+
+
+async def _stage_synthesizing(
+    client: InsforgeClient, intent_id: str, spec: dict[str, Any]
+) -> None:
+    """Run the synthesizer over completed researcher_findings and persist a
+    row to ``recommendations`` (the DB trigger publishes the realtime event).
+    """
+    candidates = await client.select(
+        "candidates",
+        {"intent_id": f"eq.{intent_id}", "order": "created_at.asc"},
+    )
+    findings = await client.select(
+        "researcher_findings",
+        {"intent_id": f"eq.{intent_id}", "status": "eq.done"},
+    )
+    if not findings:
+        log.info("synthesizing: no completed findings for %s", intent_id)
+        return
+    await run_synthesizer(client, intent_id, spec, candidates, findings)

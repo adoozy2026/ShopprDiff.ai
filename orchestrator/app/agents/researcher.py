@@ -60,6 +60,8 @@ class ListingFacts(BaseModel):
     shipping_speed: str | None = None
     ships_from: str | None = None
     return_policy: str | None = None
+    image_url: str | None = None
+    description_summary: str | None = None
     # Closed-shape submodel: Gemini Developer API rejects open `dict[str, Any]`
     # because it generates `additionalProperties: true` in the schema.
     canonical_attrs: CanonicalAttrs = CanonicalAttrs()
@@ -198,6 +200,8 @@ no code fences — matching exactly this shape:
   "shipping_speed": string|null,
   "ships_from": string|null,
   "return_policy": string|null,
+  "image_url": string|null,
+  "description_summary": string|null,
   "canonical_attrs": {
     "brand": string|null, "model": string|null, "generation": string|null,
     "storage_gb": integer|null, "color": string|null,
@@ -207,7 +211,14 @@ no code fences — matching exactly this shape:
 }
 
 Use null for fields the page does not state. price_cents and
-shipping_cost_cents are integers in US cents."""
+shipping_cost_cents are integers in US cents.
+
+image_url: the primary product image — prefer the OpenGraph `og:image`
+meta tag if present, otherwise the largest visible product photo URL.
+
+description_summary: 1-2 neutral sentences (≤200 chars) describing what's
+actually being sold — variant, what's included, notable seller-supplied
+detail. Do NOT include marketing language."""
 
 
 def _strip_code_fence(text: str) -> str:

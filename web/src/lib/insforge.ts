@@ -47,6 +47,36 @@ export type FindingRow = {
   agent_label: string;
   step: string;
   status: FindingStatus;
-  finding: Record<string, unknown>;
+  finding: FindingPayload;
   updated_at: string;
+};
+
+export type FindingPayload = {
+  title?: string | null;
+  price_cents?: number | null;
+  condition?: string | null;
+  seller?: string | null;
+  shipping_cost_cents?: number | null;
+  shipping_speed?: string | null;
+  ships_from?: string | null;
+  return_policy?: string | null;
+  image_url?: string | null;
+  description_summary?: string | null;
+  canonical_attrs?: Record<string, unknown>;
+  seller_rep?: string | null;
+  known_issues?: string[];
+  scam_score?: number;
+  scam_reasons?: string[];
+  confidence?: string;
+};
+
+export type Alternative = { title: string; why_consider: string };
+
+export type RecommendationRow = {
+  id: string;
+  intent_id: string;
+  ranked_candidate_ids: string[];
+  rationale: string;
+  alternatives: Alternative[];
+  generated_at: string;
 };
