@@ -11,10 +11,11 @@ import {
 
 type Props = { intentId: string };
 
-type RealtimeMessage = {
-  event?: string;
-  payload?: Record<string, unknown>;
-};
+// The realtime SDK delivers each message with the published payload fields
+// spread at the top level (alongside a `meta` object) — not nested under a
+// `payload` key. See @insforge/shared-schemas socketMessageSchema (meta +
+// passthrough payload).
+type RealtimeMessage<T> = T & { meta?: Record<string, unknown> };
 
 export default function IntentDashboard({ intentId }: Props) {
   const [status, setStatus] = useState<IntentStatus>("eliciting");
@@ -25,6 +26,28 @@ export default function IntentDashboard({ intentId }: Props) {
     if (!isConfigured()) return;
     const channel = `intent:${intentId}`;
     let cancelled = false;
+
+    const onIntent = (m: RealtimeMessage<{ status?: IntentStatus }>) => {
+      if (m.status) setStatus(m.status);
+    };
+    const onCandidate = (m: RealtimeMessage<Partial<CandidateRow>>) => {
+      if (m.id) setCandidates((prev) => ({ ...prev, [m.id!]: m as CandidateRow }));
+    };
+    const onFinding = (m: RealtimeMessage<Partial<FindingRow>>) => {
+      if (m.id) setFindings((prev) => ({ ...prev, [m.id!]: m as FindingRow }));
+    };
+
+    // insforge.realtime is a module-level singleton, so every listener we add
+    // must be removed on cleanup — otherwise they accumulate across remounts
+    // (React strict mode, intent navigation) and fire duplicate updates.
+    const listeners: Array<[string, (m: never) => void]> = [
+      ["intent.updated", onIntent],
+      ["intent.created", onIntent],
+      ["candidate.created", onCandidate],
+      ["candidate.updated", onCandidate],
+      ["finding.created", onFinding],
+      ["finding.updated", onFinding],
+    ];
 
     (async () => {
       // Initial hydrate so a refresh / direct nav shows existing state.
@@ -44,34 +67,18 @@ export default function IntentDashboard({ intentId }: Props) {
 
       // Realtime stream — db triggers publish to this channel.
       const res = await insforge.realtime.subscribe(channel);
+      if (cancelled) return;
       if (!res.ok) {
         console.error("realtime subscribe failed:", res.error);
         return;
       }
 
-      const onIntent = (m: RealtimeMessage) => {
-        const s = (m.payload?.status as IntentStatus) ?? undefined;
-        if (s) setStatus(s);
-      };
-      const onCandidate = (m: RealtimeMessage) => {
-        const c = m.payload as unknown as CandidateRow;
-        if (c?.id) setCandidates((prev) => ({ ...prev, [c.id]: c }));
-      };
-      const onFinding = (m: RealtimeMessage) => {
-        const f = m.payload as unknown as FindingRow;
-        if (f?.id) setFindings((prev) => ({ ...prev, [f.id]: f }));
-      };
-
-      insforge.realtime.on("intent.updated", onIntent);
-      insforge.realtime.on("intent.created", onIntent);
-      insforge.realtime.on("candidate.created", onCandidate);
-      insforge.realtime.on("candidate.updated", onCandidate);
-      insforge.realtime.on("finding.created", onFinding);
-      insforge.realtime.on("finding.updated", onFinding);
+      for (const [event, cb] of listeners) insforge.realtime.on(event, cb);
     })();
 
     return () => {
       cancelled = true;
+      for (const [event, cb] of listeners) insforge.realtime.off(event, cb);
       insforge.realtime.unsubscribe(channel);
     };
   }, [intentId]);
