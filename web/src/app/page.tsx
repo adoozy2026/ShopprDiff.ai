@@ -166,9 +166,16 @@ export default function Home() {
 
         {hasRemainingTerms && (
           <div className="space-y-3">
-            <p className="text-xs font-medium text-neutral-500">
-              Add a preference (click to append):
-            </p>
+            <div>
+              <p className="text-xs font-medium text-neutral-500">
+                Add a preference (click to append):
+              </p>
+              <p className="mt-0.5 text-xs text-neutral-400">
+                These are all optional shortcuts for common criteria — feel free
+                to skip them and type anything that matters to you directly into
+                the prompt above.
+              </p>
+            </div>
             {EXAMPLE_GROUPS.map((group) => {
               const terms = group.terms.filter((t) => !usedTerms.includes(t));
               if (terms.length === 0) return null;
