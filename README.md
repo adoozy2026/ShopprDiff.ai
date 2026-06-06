@@ -33,7 +33,7 @@ subscribes to `intent:<id>` to react.
 ## Layout
 
 ```
-db/migrations/   SQL — applied via `npx @insforge/cli db migrations up --all`
+migrations/      SQL — applied via `npx @insforge/cli db migrations up --all`
 orchestrator/    FastAPI service — runs on your laptop
 web/             Next.js app — deploys to Vercel
 ```
@@ -53,7 +53,7 @@ web/             Next.js app — deploys to Vercel
    ```bash
    npx @insforge/cli db migrations up --all
    ```
-   This applies `db/migrations/<timestamp>_init.sql`.
+   This applies `migrations/<timestamp>_init.sql`.
 5. From the dashboard, copy the **Project URL**, **anon key**, and
    **service role key**.
 
