@@ -4,6 +4,10 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { insforge, isConfigured } from "@/lib/insforge";
 
+// Clicking this chip opens an inline budget input instead of appending a fixed
+// phrase, so the appended text can include the amount the user enters.
+const BUDGET_TERM = "within my budget";
+
 // Example preference terms users can click to append to their prompt, grouped by
 // category. Each chip disappears once used so the suggestion list shrinks as the
 // prompt is built up.
@@ -21,8 +25,7 @@ const EXAMPLE_GROUPS: { label: string; terms: string[] }[] = [
   {
     label: "Price & deals",
     terms: [
-      "within my budget",
-      "on sale / best price",
+      BUDGET_TERM,
       "price-match guarantee",
       "financing available",
     ],
@@ -76,18 +79,36 @@ const EXAMPLE_GROUPS: { label: string; terms: string[] }[] = [
 export default function Home() {
   const [q, setQ] = useState("");
   const [usedTerms, setUsedTerms] = useState<string[]>([]);
+  const [budgetOpen, setBudgetOpen] = useState(false);
+  const [budget, setBudget] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const router = useRouter();
 
-  function appendTerm(term: string) {
+  // Append `text` to the prompt and mark `markTerm` as used so its chip hides.
+  function appendText(text: string, markTerm: string) {
     setQ((prev) => {
       const trimmed = prev.trimEnd();
-      if (!trimmed) return term;
+      if (!trimmed) return text;
       const sep = /[,.;]$/.test(trimmed) ? " " : ", ";
-      return trimmed + sep + term;
+      return trimmed + sep + text;
     });
-    setUsedTerms((prev) => [...prev, term]);
+    setUsedTerms((prev) => [...prev, markTerm]);
+  }
+
+  function appendTerm(term: string) {
+    appendText(term, term);
+  }
+
+  function confirmBudget() {
+    const raw = budget.trim();
+    const amount = raw.replace(/^\$+/, "").trim();
+    appendText(
+      amount ? `within my budget of $${amount}` : BUDGET_TERM,
+      BUDGET_TERM,
+    );
+    setBudget("");
+    setBudgetOpen(false);
   }
 
   async function submit(e: React.FormEvent) {
@@ -177,8 +198,13 @@ export default function Home() {
               </p>
             </div>
             {EXAMPLE_GROUPS.map((group) => {
-              const terms = group.terms.filter((t) => !usedTerms.includes(t));
-              if (terms.length === 0) return null;
+              const terms = group.terms.filter(
+                (t) =>
+                  !usedTerms.includes(t) && !(t === BUDGET_TERM && budgetOpen),
+              );
+              const showBudgetInput =
+                group.terms.includes(BUDGET_TERM) && budgetOpen;
+              if (terms.length === 0 && !showBudgetInput) return null;
               return (
                 <div key={group.label}>
                   <p className="text-[11px] font-medium uppercase tracking-wide text-neutral-400">
@@ -189,13 +215,59 @@ export default function Home() {
                       <button
                         key={term}
                         type="button"
-                        onClick={() => appendTerm(term)}
+                        onClick={() =>
+                          term === BUDGET_TERM
+                            ? setBudgetOpen(true)
+                            : appendTerm(term)
+                        }
                         className="rounded-full border border-neutral-300 bg-white px-3 py-1 text-xs text-neutral-700 shadow-sm transition hover:border-neutral-900 hover:bg-neutral-900 hover:text-white"
                       >
                         + {term}
                       </button>
                     ))}
                   </div>
+                  {showBudgetInput && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className="text-xs text-neutral-500">
+                        What&apos;s your budget?
+                      </span>
+                      <div className="flex items-center rounded-lg border border-neutral-300 bg-white px-2 shadow-sm focus-within:border-neutral-900">
+                        <span className="text-sm text-neutral-500">$</span>
+                        <input
+                          autoFocus
+                          value={budget}
+                          onChange={(e) => setBudget(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              confirmBudget();
+                            }
+                          }}
+                          inputMode="decimal"
+                          placeholder="700"
+                          className="w-24 bg-transparent px-1 py-1 text-sm text-neutral-900 placeholder:text-neutral-400 outline-none"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={confirmBudget}
+                        disabled={!budget.trim()}
+                        className="rounded-full bg-neutral-900 px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
+                      >
+                        Add
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBudget("");
+                          setBudgetOpen(false);
+                        }}
+                        className="rounded-full border border-neutral-300 bg-white px-3 py-1 text-xs text-neutral-600 transition hover:border-neutral-900"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })}
