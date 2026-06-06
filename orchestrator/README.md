@@ -1,6 +1,6 @@
 # orchestrator
 
-Local FastAPI service that runs the agent pipeline. Talks to Insforge Postgres outbound-only — woken by `pg_notify('intent_ready', ...)` from the UI inserting a row.
+Local FastAPI service that runs the agent pipeline. Talks to Insforge outbound-only over REST. Insforge does not expose a direct Postgres connection, so there is no `LISTEN/NOTIFY`; instead the service polls for `status='ready'` intents (see `app/db/poll.py`) and claims each by setting `picked_up_at`.
 
 ## Run locally
 
