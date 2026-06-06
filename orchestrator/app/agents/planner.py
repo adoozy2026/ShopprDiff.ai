@@ -188,14 +188,36 @@ async def run_planner(intent_id: str, spec: dict[str, Any]) -> list[CandidateDra
     """
     if not isinstance(spec, dict):
         spec = {}
+
+    # Conflict-heavy specs (multiple condition tags from the chip UI) confuse
+    # the model — it often returns without calling google_search at all when
+    # the intent is "find me a Mac Studio that is brand-new AND open-box AND
+    # gently-used AND certified-refurb". Build an explicit primary query that
+    # collapses to the unambiguous parts (product class + budget + region),
+    # and a secondary query that uses the rest as soft preferences.
+    product_class = (spec.get("product_class") or spec.get("raw_query") or "").strip()
+    budget = spec.get("budget_cents")
+    budget_str = f"under ${budget / 100:.0f}" if isinstance(budget, int) else ""
+    must_haves = ", ".join(spec.get("must_haves") or [])
+    us_only_hint = " in United States" if _us_only_constraint(spec) else ""
+
+    primary = f"{product_class} {budget_str}{us_only_hint}".strip()
+    secondary = f"{product_class} {must_haves}".strip() if must_haves else primary
+
     user_msg = (
-        "Find product listings matching this spec. Use 2-3 google_search calls "
-        "(broad + retailer-scoped). Stop searching once you have ~10 likely results.\n\n"
-        + json.dumps(spec, indent=2)
+        "You MUST call the google_search tool at least twice — once with the "
+        "PRIMARY query, once with the SECONDARY query — to surface product "
+        "listings. Do NOT answer from prior knowledge; product URLs are only "
+        "useful if Google returned them.\n\n"
+        f"PRIMARY query: {primary!r}\n"
+        f"SECONDARY query: {secondary!r}\n\n"
+        f"Full spec for reference:\n{json.dumps(spec, indent=2)}"
     )
 
     client = get_client()
-    log.info("planner: intent_id=%s spec_keys=%s", intent_id, list(spec.keys()))
+    log.info(
+        "planner: intent_id=%s primary=%r secondary=%r", intent_id, primary, secondary
+    )
     resp = await client.aio.models.generate_content(
         model=settings.gemini_model_researcher,
         contents=user_msg,
@@ -208,6 +230,11 @@ async def run_planner(intent_id: str, spec: dict[str, Any]) -> list[CandidateDra
 
     raw = _extract_grounding_urls(resp)
     log.info("planner: %d grounding URLs returned", len(raw))
+    if not raw:
+        log.warning(
+            "planner: empty grounding metadata — google_search likely never invoked "
+            "for intent %s", intent_id
+        )
 
     # Resolve grounding redirects in parallel so candidate.source_url is the
     # real retailer URL (not a one-time-use vertexai redirect).

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   insforge,
   imgProxy,
@@ -154,11 +154,16 @@ export default function IntentDashboard({ intentId }: Props) {
         <h2 className="mb-3 text-sm font-medium text-neutral-700">
           {candidateList.length > 0
             ? `Researchers (${candidateList.length})`
+            : intent?.status === "done" || intent?.status === "error"
+            ? "No candidates found"
             : "Researchers (waiting for candidates…)"}
         </h2>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {candidateList.length === 0
-            ? [0, 1, 2, 3, 4, 5].map((i) => (
+        {candidateList.length === 0 ? (
+          intent?.status === "done" || intent?.status === "error" ? (
+            <EmptyState intent={intent} />
+          ) : (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {[0, 1, 2, 3, 4, 5].map((i) => (
                 <div
                   key={i}
                   className="rounded-lg border border-dashed border-neutral-300 p-4"
@@ -167,17 +172,22 @@ export default function IntentDashboard({ intentId }: Props) {
                   <div className="mt-2 h-3 w-40 animate-pulse rounded bg-neutral-100" />
                   <div className="mt-6 h-3 w-32 animate-pulse rounded bg-neutral-100" />
                 </div>
-              ))
-            : candidateList.map((c) => (
-                <CandidateTile
-                  key={c.id}
-                  candidate={c}
-                  finding={findingByCandidate[c.id]}
-                  isTopPick={topPickId === c.id}
-                  pick={rec?.picks?.find((p) => p.candidate_id === c.id)}
-                />
               ))}
-        </div>
+            </div>
+          )
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {candidateList.map((c) => (
+              <CandidateTile
+                key={c.id}
+                candidate={c}
+                finding={findingByCandidate[c.id]}
+                isTopPick={topPickId === c.id}
+                pick={rec?.picks?.find((p) => p.candidate_id === c.id)}
+              />
+            ))}
+          </div>
+        )}
       </section>
 
       {rec && rec.alternatives && rec.alternatives.length > 0 && (
@@ -417,6 +427,54 @@ function TopPickPanel({
         </div>
       )}
     </section>
+  );
+}
+
+function EmptyState({ intent }: { intent: IntentRow }) {
+  const spec = intent.spec ?? {};
+  const get = (k: string) => spec[k as keyof typeof spec];
+  const allFields: Array<[string, unknown]> = [
+    ["product", get("product_class")],
+    [
+      "budget",
+      typeof get("budget_cents") === "number"
+        ? `$${((get("budget_cents") as number) / 100).toFixed(0)}`
+        : null,
+    ],
+    ["condition", get("condition")],
+    ["must-haves", (get("must_haves") as string[] | undefined)?.join(", ")],
+    ["deal-breakers", (get("deal_breakers") as string[] | undefined)?.join(", ")],
+  ];
+  const fields = allFields.filter(
+    (pair): pair is [string, unknown] =>
+      Boolean(pair[1]) && (typeof pair[1] !== "string" || pair[1].length > 0),
+  );
+
+  return (
+    <div className="rounded-lg border border-dashed border-neutral-300 bg-neutral-50 p-6">
+      <p className="text-sm text-neutral-800">
+        {intent.status === "error"
+          ? "Something went wrong while searching — see console for details."
+          : "I searched but couldn't find product listings matching your query."}
+      </p>
+      <p className="mt-2 text-xs text-neutral-600">
+        This usually happens when the query has conflicting requirements (e.g.
+        asking for both &quot;brand new&quot; and &quot;gently used&quot;), or
+        when the product is niche enough that Google&apos;s shopping results
+        didn&apos;t surface direct buy pages. Try simplifying the prompt — the
+        &quot;Refine search&quot; field above is the fastest way.
+      </p>
+      {fields.length > 0 && (
+        <dl className="mt-4 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1.5 text-xs">
+          {fields.map(([k, v]) => (
+            <Fragment key={k}>
+              <dt className="text-neutral-500">{k}</dt>
+              <dd className="text-neutral-800">{String(v)}</dd>
+            </Fragment>
+          ))}
+        </dl>
+      )}
+    </div>
   );
 }
 

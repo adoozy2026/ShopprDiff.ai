@@ -103,6 +103,12 @@ Plus ALTERNATIVES: 1–3 adjacent shopping ideas (cheaper variant, refurb
 path, "wait for a sale", different storage tier) the user might also
 consider. Each is one sentence.
 
+Budget: keep each pick.one_liner ≤ 18 words and pick.detail ≤ 35 words
+(skip detail if you don't have something useful to say). Each tradeoff
+summary ≤ 25 words. Each warning ≤ 30 words. Rationale ≤ 3 sentences.
+This budget exists so the structured JSON fits in the output window —
+exceeding it gets the response truncated and dropped.
+
 Rules:
   * Only recommend candidates from the input list — never invent listings.
   * If a candidate has scam_score ≥ 40 or its variant doesn't match the
@@ -229,12 +235,22 @@ async def run_synthesizer(
             contents=user_msg,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
-                max_output_tokens=4096,
+                # 8192 because the schema can easily exceed 4096:
+                # picks × N + tradeoffs × ~4 + warnings + alternatives + rationale.
+                # The previous 4096 truncated JSON mid-string and silently 404'd
+                # the recommendation row.
+                max_output_tokens=8192,
             ),
         )
     except Exception as e:
         log.warning("synthesizer call failed: %s", e)
         return SynthOutput()
+    # Surface stop_reason so silent truncation is visible in the next debug pass.
+    cands = getattr(resp, "candidates", None) or []
+    if cands:
+        reason = getattr(cands[0], "finish_reason", None)
+        if reason and str(reason) not in ("FinishReason.STOP", "1", "STOP"):
+            log.warning("synthesizer: unusual finish_reason=%s", reason)
 
     text = _strip_code_fence(resp.text or "")
     data = _coerce_json_object(text)
