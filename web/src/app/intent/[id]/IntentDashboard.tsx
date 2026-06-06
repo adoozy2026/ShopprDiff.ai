@@ -128,19 +128,12 @@ export default function IntentDashboard({ intentId }: Props) {
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
-      <header className="flex items-baseline justify-between border-b border-neutral-200 pb-4">
-        <div>
-          <div className="text-xs uppercase tracking-wider text-neutral-500">Intent</div>
-          <h1 className="mt-1 text-xl font-semibold">
-            {intent?.raw_query || "Shopping in progress"}
-          </h1>
-        </div>
-        <div className="rounded-full bg-neutral-100 px-3 py-1 text-xs text-neutral-700">
+      <header className="flex items-baseline justify-between gap-4 border-b border-neutral-200 pb-4">
+        <UserPromptSection intent={intent} />
+        <div className="shrink-0 rounded-full bg-neutral-100 px-3 py-1 text-xs text-neutral-700">
           status: <span className="font-mono">{intent?.status ?? "loading"}</span>
         </div>
       </header>
-
-      <IntakeSection intent={intent} />
 
       {rec && topPick && (
         <TopPickPanel
@@ -396,80 +389,97 @@ function AlternativesSection({ alternatives }: { alternatives: Alternative[] }) 
   );
 }
 
-function IntakeSection({ intent }: { intent: IntentRow | null }) {
-  const [reply, setReply] = useState("");
-  const [sending, setSending] = useState(false);
+function UserPromptSection({ intent }: { intent: IntentRow | null }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const turns = intent?.clarifying_turns ?? [];
-  const lastTurn = turns.at(-1);
-  const awaitingUser = intent?.status === "eliciting" && lastTurn?.role === "assistant";
+  function startEditing() {
+    setDraft(intent?.raw_query ?? "");
+    setErr(null);
+    setEditing(true);
+  }
 
-  if (!intent) return null;
-  if (turns.length === 0 && intent.status !== "eliciting") return null;
+  function cancelEditing() {
+    setEditing(false);
+    setErr(null);
+  }
 
-  async function send(e: React.FormEvent) {
+  async function save(e: React.FormEvent) {
     e.preventDefault();
-    if (!intent || !reply.trim() || sending) return;
-    setSending(true);
+    if (!intent || !draft.trim() || saving) return;
+    setSaving(true);
     setErr(null);
     try {
-      const nextTurns: ClarifyingTurn[] = [
-        ...turns,
-        { role: "user", text: reply.trim() },
-      ];
+      // Re-run the agent pipeline with the refined prompt: reset the intake
+      // conversation and hand the intent back to the dispatcher (see page.tsx).
+      const nextTurns: ClarifyingTurn[] = [{ role: "user", text: draft.trim() }];
       const { error } = await insforge.database
         .from("intents")
         .update({
+          raw_query: draft.trim(),
           clarifying_turns: nextTurns,
+          status: "eliciting",
           picked_up_at: null,
         })
         .eq("id", intent.id);
       if (error) throw error;
-      setReply("");
+      setEditing(false);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
-      setSending(false);
+      setSaving(false);
     }
   }
 
   return (
-    <section className="mt-6 rounded-lg border border-neutral-200 bg-neutral-50 p-4">
-      <h2 className="mb-3 text-sm font-medium text-neutral-700">Intake</h2>
-      <div className="space-y-2">
-        {turns.map((t, i) => (
-          <div
-            key={i}
-            className={`max-w-[80%] rounded-md px-3 py-2 text-sm ${
-              t.role === "user"
-                ? "ml-auto bg-neutral-900 text-white"
-                : "bg-white text-neutral-900 shadow-sm"
-            }`}
-          >
-            {t.text}
-          </div>
-        ))}
-      </div>
-      {awaitingUser && (
-        <form onSubmit={send} className="mt-4 flex gap-2">
-          <input
-            value={reply}
-            onChange={(e) => setReply(e.target.value)}
-            placeholder="Type your answer…"
-            className="flex-1 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 outline-none focus:border-neutral-900"
+    <div className="min-w-0 flex-1">
+      <div className="text-xs uppercase tracking-wider text-neutral-500">User Prompt</div>
+      {editing ? (
+        <form onSubmit={save} className="mt-1">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={3}
+            className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 outline-none focus:border-neutral-900"
             autoFocus
           />
-          <button
-            type="submit"
-            disabled={sending || !reply.trim()}
-            className="rounded-md bg-neutral-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-          >
-            {sending ? "Sending…" : "Send"}
-          </button>
+          <div className="mt-2 flex gap-2">
+            <button
+              type="submit"
+              disabled={saving || !draft.trim()}
+              className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button
+              type="button"
+              onClick={cancelEditing}
+              disabled={saving}
+              className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
         </form>
+      ) : (
+        <div className="mt-1 flex items-start gap-3">
+          <h1 className="text-xl font-semibold">
+            {intent?.raw_query || "Shopping in progress"}
+          </h1>
+          {intent && (
+            <button
+              type="button"
+              onClick={startEditing}
+              className="mt-0.5 shrink-0 rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+            >
+              Refine search
+            </button>
+          )}
+        </div>
       )}
-      {err && <p className="mt-3 text-xs text-red-700">{err}</p>}
-    </section>
+      {err && <p className="mt-2 text-xs text-red-700">{err}</p>}
+    </div>
   );
 }
