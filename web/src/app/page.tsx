@@ -156,6 +156,14 @@ export default function Home() {
           className="w-full rounded-lg border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 placeholder:text-neutral-400 shadow-sm outline-none focus:border-neutral-900"
         />
 
+        <button
+          type="submit"
+          disabled={submitting || !q.trim()}
+          className="w-full rounded-lg bg-neutral-900 px-4 py-3 text-sm font-medium text-white shadow-sm transition hover:bg-neutral-800 disabled:opacity-50"
+        >
+          {submitting ? "Starting…" : "Start shopping"}
+        </button>
+
         {hasRemainingTerms && (
           <div className="space-y-3">
             <p className="text-xs font-medium text-neutral-500">
@@ -186,14 +194,6 @@ export default function Home() {
             })}
           </div>
         )}
-
-        <button
-          type="submit"
-          disabled={submitting || !q.trim()}
-          className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-        >
-          {submitting ? "Starting…" : "Start shopping"}
-        </button>
       </form>
 
       {!isConfigured() && (
