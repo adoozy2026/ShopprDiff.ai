@@ -68,6 +68,19 @@ class ListingFacts(BaseModel):
     canonical_attrs: CanonicalAttrs = CanonicalAttrs()
 
 
+def _looks_like_url(s: str) -> bool:
+    """Cheap sanity check: a single well-formed URL with no embedded second
+    scheme. Catches the common LLM failure mode of concatenating two URLs."""
+    if not s or not isinstance(s, str):
+        return False
+    s = s.strip()
+    if not s.startswith(("http://", "https://")):
+        return False
+    # Reject anything with a second scheme inside (e.g. ".../foohttps://...").
+    rest = s[8:] if s.startswith("https://") else s[7:]
+    return "https://" not in rest and "http://" not in rest
+
+
 # ---- Public entry point -------------------------------------------------
 
 
@@ -120,9 +133,16 @@ async def run_researcher(
             fetch_page_meta(candidate["source_url"]),
             return_exceptions=False,
         )
-        # Merge: LLM wins for fields it actually populated; meta fills gaps.
-        if not listing.image_url and meta.image_url:
+        # Merge rules per field:
+        #   * image_url — OG wins outright. The LLM frequently emits
+        #     concatenated garbage like "<source_url><og:image>" so its value
+        #     is untrustworthy. og:image is what the retailer publishes.
+        #   * title / description — LLM wins when present (more on-spec),
+        #     OG fills gaps.
+        if meta.image_url:
             listing.image_url = meta.image_url
+        elif listing.image_url and not _looks_like_url(listing.image_url):
+            listing.image_url = None
         if not listing.title and meta.title:
             listing.title = meta.title
         if not listing.description_summary and meta.description:
