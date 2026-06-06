@@ -80,7 +80,8 @@ export default function Home() {
   const [q, setQ] = useState("");
   const [usedTerms, setUsedTerms] = useState<string[]>([]);
   const [budgetOpen, setBudgetOpen] = useState(false);
-  const [budget, setBudget] = useState("");
+  const [budgetMin, setBudgetMin] = useState("");
+  const [budgetMax, setBudgetMax] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const router = useRouter();
@@ -100,15 +101,21 @@ export default function Home() {
     appendText(term, term);
   }
 
-  function confirmBudget() {
-    const raw = budget.trim();
-    const amount = raw.replace(/^\$+/, "").trim();
-    appendText(
-      amount ? `within my budget of $${amount}` : BUDGET_TERM,
-      BUDGET_TERM,
-    );
-    setBudget("");
+  function closeBudget() {
+    setBudgetMin("");
+    setBudgetMax("");
     setBudgetOpen(false);
+  }
+
+  function confirmBudget() {
+    const min = budgetMin.trim().replace(/^\$+/, "").trim();
+    const max = budgetMax.trim().replace(/^\$+/, "").trim();
+    let text = BUDGET_TERM;
+    if (min && max) text = `within my budget of $${min}\u2013$${max}`;
+    else if (max) text = `within my budget of up to $${max}`;
+    else if (min) text = `within my budget of at least $${min}`;
+    appendText(text, BUDGET_TERM);
+    closeBudget();
   }
 
   async function submit(e: React.FormEvent) {
@@ -227,45 +234,65 @@ export default function Home() {
                     ))}
                   </div>
                   {showBudgetInput && (
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <span className="text-xs text-neutral-500">
-                        What&apos;s your budget?
-                      </span>
-                      <div className="flex items-center rounded-lg border border-neutral-300 bg-white px-2 shadow-sm focus-within:border-neutral-900">
-                        <span className="text-sm text-neutral-500">$</span>
-                        <input
-                          autoFocus
-                          value={budget}
-                          onChange={(e) => setBudget(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              confirmBudget();
-                            }
-                          }}
-                          inputMode="decimal"
-                          placeholder="700"
-                          className="w-24 bg-transparent px-1 py-1 text-sm text-neutral-900 placeholder:text-neutral-400 outline-none"
-                        />
+                    <div className="mt-2 rounded-lg border-2 border-indigo-400 bg-indigo-50 p-3 shadow-sm">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">
+                        Set your budget range
+                      </p>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <div className="flex items-center rounded-md border border-indigo-300 bg-white px-2 shadow-sm focus-within:border-indigo-600 focus-within:ring-1 focus-within:ring-indigo-400">
+                          <span className="text-sm font-medium text-indigo-500">$</span>
+                          <input
+                            autoFocus
+                            value={budgetMin}
+                            onChange={(e) => setBudgetMin(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                confirmBudget();
+                              }
+                            }}
+                            inputMode="decimal"
+                            placeholder="min"
+                            className="w-20 bg-transparent px-1 py-1 text-sm font-medium text-indigo-900 placeholder:font-normal placeholder:text-indigo-300 outline-none"
+                          />
+                        </div>
+                        <span className="text-sm font-medium text-indigo-600">to</span>
+                        <div className="flex items-center rounded-md border border-indigo-300 bg-white px-2 shadow-sm focus-within:border-indigo-600 focus-within:ring-1 focus-within:ring-indigo-400">
+                          <span className="text-sm font-medium text-indigo-500">$</span>
+                          <input
+                            value={budgetMax}
+                            onChange={(e) => setBudgetMax(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                confirmBudget();
+                              }
+                            }}
+                            inputMode="decimal"
+                            placeholder="max"
+                            className="w-20 bg-transparent px-1 py-1 text-sm font-medium text-indigo-900 placeholder:font-normal placeholder:text-indigo-300 outline-none"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={confirmBudget}
+                          disabled={!budgetMin.trim() && !budgetMax.trim()}
+                          className="rounded-md bg-indigo-600 px-3 py-1 text-xs font-medium text-white transition hover:bg-indigo-700 disabled:opacity-50"
+                        >
+                          Add
+                        </button>
+                        <button
+                          type="button"
+                          onClick={closeBudget}
+                          className="rounded-md border border-indigo-300 bg-white px-3 py-1 text-xs font-medium text-indigo-600 transition hover:border-indigo-600"
+                        >
+                          Cancel
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={confirmBudget}
-                        disabled={!budget.trim()}
-                        className="rounded-full bg-neutral-900 px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
-                      >
-                        Add
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setBudget("");
-                          setBudgetOpen(false);
-                        }}
-                        className="rounded-full border border-neutral-300 bg-white px-3 py-1 text-xs text-neutral-600 transition hover:border-neutral-900"
-                      >
-                        Cancel
-                      </button>
+                      <p className="mt-1.5 text-[11px] text-indigo-500">
+                        Enter a min, a max, or both — leave one blank for an
+                        open-ended range.
+                      </p>
                     </div>
                   )}
                 </div>
