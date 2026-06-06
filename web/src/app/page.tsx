@@ -1,17 +1,46 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useRouter } from "next/navigation";
 import { insforge, isConfigured } from "@/lib/insforge";
 
-// Clicking this chip opens an inline budget input instead of appending a fixed
-// phrase, so the appended text can include the amount the user enters.
-const BUDGET_TERM = "within my budget";
+// A field inside a term's secondary-input prompt.
+type PromptField = {
+  key: string;
+  placeholder: string;
+  prefix?: string; // e.g. "$" shown before the input
+  before?: string; // e.g. "to" shown between two fields
+};
+
+// Some terms are ambiguous without a value (a budget, a rating, a number of
+// days, etc). Those carry a `prompt` describing the inline inputs to collect and
+// a `build` that turns the entered values into the text appended to the query.
+type PromptSpec = {
+  title: string;
+  fields: PromptField[];
+  hint?: string;
+  // When true the chip can be confirmed with every field blank (the value is an
+  // optional refinement); otherwise at least one field must be filled.
+  optional?: boolean;
+  build: (values: Record<string, string>) => string;
+};
+
+// A term is either a plain phrase that appends as-is, or one that opens a prompt.
+type Term = string | { label: string; prompt: PromptSpec };
+
+const termLabel = (t: Term): string => (typeof t === "string" ? t : t.label);
+const termPrompt = (t: Term): PromptSpec | null =>
+  typeof t === "string" ? null : t.prompt;
+
+// Strip a leading "$" and surrounding whitespace from a money field value.
+const money = (v: string | undefined) =>
+  (v ?? "").trim().replace(/^\$+/, "").trim();
+const val = (v: string | undefined) => (v ?? "").trim();
 
 // Example preference terms users can click to append to their prompt, grouped by
 // category. Each chip disappears once used so the suggestion list shrinks as the
-// prompt is built up.
-const EXAMPLE_GROUPS: { label: string; terms: string[] }[] = [
+// prompt is built up. Terms with a `prompt` collect extra info before appending.
+const EXAMPLE_GROUPS: { label: string; terms: Term[] }[] = [
   {
     label: "Condition",
     terms: [
@@ -25,7 +54,25 @@ const EXAMPLE_GROUPS: { label: string; terms: string[] }[] = [
   {
     label: "Price & deals",
     terms: [
-      BUDGET_TERM,
+      {
+        label: "within my budget",
+        prompt: {
+          title: "Set your budget range",
+          fields: [
+            { key: "min", prefix: "$", placeholder: "min" },
+            { key: "max", prefix: "$", placeholder: "max", before: "to" },
+          ],
+          hint: "Enter a min, a max, or both — leave one blank for an open-ended range.",
+          build: (v) => {
+            const min = money(v.min);
+            const max = money(v.max);
+            if (min && max) return `within my budget of $${min}–$${max}`;
+            if (max) return `within my budget of up to $${max}`;
+            if (min) return `within my budget of at least $${min}`;
+            return "within my budget";
+          },
+        },
+      },
       "price-match guarantee",
       "financing available",
     ],
@@ -33,8 +80,31 @@ const EXAMPLE_GROUPS: { label: string; terms: string[] }[] = [
   {
     label: "Seller",
     terms: [
-      "prefer a trusted retailer",
-      "highly rated seller (4.5★+)",
+      {
+        label: "prefer a trusted retailer",
+        prompt: {
+          title: "Preferred retailer",
+          optional: true,
+          fields: [{ key: "retailer", placeholder: "e.g. Amazon, Best Buy" }],
+          hint: "Name a store, or leave blank for any trusted retailer.",
+          build: (v) =>
+            val(v.retailer)
+              ? `prefer to buy from ${val(v.retailer)}`
+              : "prefer a trusted retailer",
+        },
+      },
+      {
+        label: "highly rated seller",
+        prompt: {
+          title: "Minimum seller rating",
+          fields: [{ key: "rating", placeholder: "4.5" }],
+          hint: "Minimum star rating out of 5.",
+          build: (v) =>
+            val(v.rating)
+              ? `highly rated seller (${val(v.rating)}★+)`
+              : "highly rated seller",
+        },
+      },
       "sold/shipped by the brand",
     ],
   },
@@ -42,15 +112,57 @@ const EXAMPLE_GROUPS: { label: string; terms: string[] }[] = [
     label: "Shipping & pickup",
     terms: [
       "free shipping",
-      "ships within 3 days",
-      "local pickup available",
+      {
+        label: "fast shipping",
+        prompt: {
+          title: "Maximum shipping time",
+          fields: [{ key: "days", placeholder: "3" }],
+          hint: "Greatest number of days until it ships.",
+          build: (v) =>
+            val(v.days) ? `ships within ${val(v.days)} days` : "ships quickly",
+        },
+      },
+      {
+        label: "local pickup available",
+        prompt: {
+          title: "Local pickup",
+          optional: true,
+          fields: [{ key: "location", placeholder: "city or ZIP" }],
+          hint: "Add a location, or leave blank for any nearby pickup.",
+          build: (v) =>
+            val(v.location)
+              ? `local pickup available near ${val(v.location)}`
+              : "local pickup available",
+        },
+      },
     ],
   },
   {
     label: "Returns & warranty",
     terms: [
-      "free 30-day returns",
-      "includes a warranty",
+      {
+        label: "free returns",
+        prompt: {
+          title: "Return window",
+          fields: [{ key: "days", placeholder: "30" }],
+          hint: "Minimum number of days to return for free.",
+          build: (v) =>
+            val(v.days) ? `free ${val(v.days)}-day returns` : "free returns",
+        },
+      },
+      {
+        label: "includes a warranty",
+        prompt: {
+          title: "Warranty length",
+          optional: true,
+          fields: [{ key: "length", placeholder: "e.g. 1 year" }],
+          hint: "Minimum warranty length, or leave blank for any warranty.",
+          build: (v) =>
+            val(v.length)
+              ? `includes at least a ${val(v.length)} warranty`
+              : "includes a warranty",
+        },
+      },
     ],
   },
   {
@@ -79,9 +191,9 @@ const EXAMPLE_GROUPS: { label: string; terms: string[] }[] = [
 export default function Home() {
   const [q, setQ] = useState("");
   const [usedTerms, setUsedTerms] = useState<string[]>([]);
-  const [budgetOpen, setBudgetOpen] = useState(false);
-  const [budgetMin, setBudgetMin] = useState("");
-  const [budgetMax, setBudgetMax] = useState("");
+  // Label of the term whose secondary-input prompt is open, plus its field values.
+  const [openTerm, setOpenTerm] = useState<string | null>(null);
+  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const router = useRouter();
@@ -101,21 +213,25 @@ export default function Home() {
     appendText(term, term);
   }
 
-  function closeBudget() {
-    setBudgetMin("");
-    setBudgetMax("");
-    setBudgetOpen(false);
+  function openPrompt(label: string) {
+    setOpenTerm(label);
+    setFieldValues({});
   }
 
-  function confirmBudget() {
-    const min = budgetMin.trim().replace(/^\$+/, "").trim();
-    const max = budgetMax.trim().replace(/^\$+/, "").trim();
-    let text = BUDGET_TERM;
-    if (min && max) text = `within my budget of $${min}\u2013$${max}`;
-    else if (max) text = `within my budget of up to $${max}`;
-    else if (min) text = `within my budget of at least $${min}`;
-    appendText(text, BUDGET_TERM);
-    closeBudget();
+  function closePrompt() {
+    setOpenTerm(null);
+    setFieldValues({});
+  }
+
+  function confirmPrompt(spec: PromptSpec, label: string) {
+    appendText(spec.build(fieldValues) || label, label);
+    closePrompt();
+  }
+
+  // Whether the open prompt has enough input to be submitted.
+  function canSubmit(spec: PromptSpec) {
+    if (spec.optional) return true;
+    return spec.fields.some((f) => (fieldValues[f.key] ?? "").trim() !== "");
   }
 
   async function submit(e: React.FormEvent) {
@@ -162,7 +278,7 @@ export default function Home() {
   }
 
   const hasRemainingTerms = EXAMPLE_GROUPS.some((g) =>
-    g.terms.some((t) => !usedTerms.includes(t)),
+    g.terms.some((t) => !usedTerms.includes(termLabel(t))),
   );
 
   return (
@@ -207,92 +323,102 @@ export default function Home() {
             {EXAMPLE_GROUPS.map((group) => {
               const terms = group.terms.filter(
                 (t) =>
-                  !usedTerms.includes(t) && !(t === BUDGET_TERM && budgetOpen),
+                  !usedTerms.includes(termLabel(t)) &&
+                  termLabel(t) !== openTerm,
               );
-              const showBudgetInput =
-                group.terms.includes(BUDGET_TERM) && budgetOpen;
-              if (terms.length === 0 && !showBudgetInput) return null;
+              const openInThisGroup = group.terms.find(
+                (t) => termLabel(t) === openTerm,
+              );
+              const openSpec = openInThisGroup
+                ? termPrompt(openInThisGroup)
+                : null;
+              if (terms.length === 0 && !openSpec) return null;
               return (
                 <div key={group.label}>
                   <p className="text-[11px] font-medium uppercase tracking-wide text-neutral-400">
                     {group.label}
                   </p>
                   <div className="mt-1.5 flex flex-wrap gap-2">
-                    {terms.map((term) => (
-                      <button
-                        key={term}
-                        type="button"
-                        onClick={() =>
-                          term === BUDGET_TERM
-                            ? setBudgetOpen(true)
-                            : appendTerm(term)
-                        }
-                        className="rounded-full border border-neutral-300 bg-white px-3 py-1 text-xs text-neutral-700 shadow-sm transition hover:border-neutral-900 hover:bg-neutral-900 hover:text-white"
-                      >
-                        + {term}
-                      </button>
-                    ))}
+                    {terms.map((term) => {
+                      const label = termLabel(term);
+                      const spec = termPrompt(term);
+                      return (
+                        <button
+                          key={label}
+                          type="button"
+                          onClick={() =>
+                            spec ? openPrompt(label) : appendTerm(label)
+                          }
+                          className="rounded-full border border-neutral-300 bg-white px-3 py-1 text-xs text-neutral-700 shadow-sm transition hover:border-neutral-900 hover:bg-neutral-900 hover:text-white"
+                        >
+                          + {label}
+                          {spec ? "…" : ""}
+                        </button>
+                      );
+                    })}
                   </div>
-                  {showBudgetInput && (
+                  {openSpec && openTerm && (
                     <div className="mt-2 rounded-lg border-2 border-indigo-400 bg-indigo-50 p-3 shadow-sm">
                       <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">
-                        Set your budget range
+                        {openSpec.title}
                       </p>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <div className="flex items-center rounded-md border border-indigo-300 bg-white px-2 shadow-sm focus-within:border-indigo-600 focus-within:ring-1 focus-within:ring-indigo-400">
-                          <span className="text-sm font-medium text-indigo-500">$</span>
-                          <input
-                            autoFocus
-                            value={budgetMin}
-                            onChange={(e) => setBudgetMin(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                confirmBudget();
-                              }
-                            }}
-                            inputMode="decimal"
-                            placeholder="min"
-                            className="w-20 bg-transparent px-1 py-1 text-sm font-medium text-indigo-900 placeholder:font-normal placeholder:text-indigo-300 outline-none"
-                          />
-                        </div>
-                        <span className="text-sm font-medium text-indigo-600">to</span>
-                        <div className="flex items-center rounded-md border border-indigo-300 bg-white px-2 shadow-sm focus-within:border-indigo-600 focus-within:ring-1 focus-within:ring-indigo-400">
-                          <span className="text-sm font-medium text-indigo-500">$</span>
-                          <input
-                            value={budgetMax}
-                            onChange={(e) => setBudgetMax(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                confirmBudget();
-                              }
-                            }}
-                            inputMode="decimal"
-                            placeholder="max"
-                            className="w-20 bg-transparent px-1 py-1 text-sm font-medium text-indigo-900 placeholder:font-normal placeholder:text-indigo-300 outline-none"
-                          />
-                        </div>
+                        {openSpec.fields.map((f, i) => (
+                          <Fragment key={f.key}>
+                            {f.before && (
+                              <span className="text-sm font-medium text-indigo-600">
+                                {f.before}
+                              </span>
+                            )}
+                            <div className="flex items-center rounded-md border border-indigo-300 bg-white px-2 shadow-sm focus-within:border-indigo-600 focus-within:ring-1 focus-within:ring-indigo-400">
+                              {f.prefix && (
+                                <span className="text-sm font-medium text-indigo-500">
+                                  {f.prefix}
+                                </span>
+                              )}
+                              <input
+                                autoFocus={i === 0}
+                                value={fieldValues[f.key] ?? ""}
+                                onChange={(e) =>
+                                  setFieldValues((prev) => ({
+                                    ...prev,
+                                    [f.key]: e.target.value,
+                                  }))
+                                }
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    if (canSubmit(openSpec))
+                                      confirmPrompt(openSpec, openTerm);
+                                  }
+                                }}
+                                placeholder={f.placeholder}
+                                className="w-28 bg-transparent px-1 py-1 text-sm font-medium text-indigo-900 placeholder:font-normal placeholder:text-indigo-300 outline-none"
+                              />
+                            </div>
+                          </Fragment>
+                        ))}
                         <button
                           type="button"
-                          onClick={confirmBudget}
-                          disabled={!budgetMin.trim() && !budgetMax.trim()}
+                          onClick={() => confirmPrompt(openSpec, openTerm)}
+                          disabled={!canSubmit(openSpec)}
                           className="rounded-md bg-indigo-600 px-3 py-1 text-xs font-medium text-white transition hover:bg-indigo-700 disabled:opacity-50"
                         >
                           Add
                         </button>
                         <button
                           type="button"
-                          onClick={closeBudget}
+                          onClick={closePrompt}
                           className="rounded-md border border-indigo-300 bg-white px-3 py-1 text-xs font-medium text-indigo-600 transition hover:border-indigo-600"
                         >
                           Cancel
                         </button>
                       </div>
-                      <p className="mt-1.5 text-[11px] text-indigo-500">
-                        Enter a min, a max, or both — leave one blank for an
-                        open-ended range.
-                      </p>
+                      {openSpec.hint && (
+                        <p className="mt-1.5 text-[11px] text-indigo-500">
+                          {openSpec.hint}
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
