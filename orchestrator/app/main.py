@@ -40,5 +40,5 @@ async def healthz():
         "insforge_configured": bool(
             settings.insforge_project_url and settings.insforge_service_role_key
         ),
-        "anthropic_configured": bool(settings.anthropic_api_key),
+        "google_configured": bool(settings.google_api_key),
     }

@@ -20,8 +20,8 @@ multi-week price-trend narrative.
         |                                          |
 [FastAPI orchestrator — your laptop, outbound only]
                                                    |
-                                                   | Anthropic SDK + tool-use loops
-                                                   | web_search / web_fetch (server tools)
+                                                   | google-genai SDK + tool-use loops
+                                                   | google_search / url_context (built-in)
                                                    | playwright fallback (in-process)
 ```
 
@@ -57,15 +57,15 @@ web/             Next.js app — deploys to Vercel
 5. From the dashboard, copy the **Project URL**, **anon key**, and
    **service role key**.
 
-### 2. Anthropic
+### 2. Google AI Studio (Gemini)
 
-API key from https://console.anthropic.com.
+API key from https://aistudio.google.com/app/apikey.
 
 ### 3. Environment variables
 
 ```bash
 cp .env.example .env
-# fill in Insforge + Anthropic values
+# fill in Insforge + Google AI Studio values
 ```
 
 The web app reads `NEXT_PUBLIC_INSFORGE_*` — set the same values in Vercel

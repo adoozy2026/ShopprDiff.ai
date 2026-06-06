@@ -1,15 +1,15 @@
-"""Tool wiring for the agent pipeline.
+"""Tool wiring for the agent pipeline (Gemini stack).
 
 Three tools are exposed:
 
-  * **web_search** — Anthropic server tool. Claude executes searches on
-    Anthropic's side; results come back as ``web_search_tool_result`` blocks.
-    No client-side dispatch needed.
-  * **web_fetch** — Anthropic server tool. Reads static HTML/PDF. Does NOT
-    execute JavaScript; for JS-heavy pages, fall back to ``playwright_fetch``.
-  * **playwright_fetch** — local client tool. We launch a headless chromium
-    in-process when the model emits a ``tool_use`` block for this tool, then
-    return the rendered text as a ``tool_result`` block.
+  * **google_search** — Gemini built-in server tool. Google runs the search and
+    returns grounding metadata. No client-side dispatch needed.
+  * **url_context** — Gemini built-in server tool. Reads URLs the model sees
+    in context. Does not fully render JavaScript pages; for those, fall back
+    to ``playwright_fetch``.
+  * **playwright_fetch** — local function declaration. Gemini emits a
+    ``FunctionCall`` block for it; we run a headless chromium and reply with
+    a ``FunctionResponse`` part.
 
 In ``FIXTURE_MODE``, ``playwright_fetch`` short-circuits to canned page
 content from ``fixtures.py`` so we never need a browser or network.
@@ -21,51 +21,43 @@ import asyncio
 import logging
 from typing import Any
 
+from google.genai import types
+
 from app.config import settings
 from app.tools.fixtures import fixture_fetch
 
 log = logging.getLogger(__name__)
 
 
-# ---- Anthropic server-tool blocks ---------------------------------------
+# ---- Gemini server-tool bundle ------------------------------------------
 
-WEB_SEARCH_TOOL: dict[str, Any] = {
-    "type": "web_search_20260209",
-    "name": "web_search",
-    "max_uses": 8,
-}
-
-WEB_FETCH_TOOL: dict[str, Any] = {
-    "type": "web_fetch_20260209",
-    "name": "web_fetch",
-    "max_uses": 10,
-    "max_content_tokens": 60000,
-}
+GOOGLE_SEARCH_TOOL = types.Tool(google_search=types.GoogleSearch())
+URL_CONTEXT_TOOL = types.Tool(url_context=types.UrlContext())
 
 
-def server_tools() -> list[dict[str, Any]]:
-    """The Anthropic-side tool list to pass to messages.create(tools=...)."""
-    return [WEB_SEARCH_TOOL, WEB_FETCH_TOOL]
+def server_tools() -> list[types.Tool]:
+    """Server-side tool list (search + url context)."""
+    return [GOOGLE_SEARCH_TOOL, URL_CONTEXT_TOOL]
 
 
 # ---- Local client tool: playwright_fetch -------------------------------
 
-PLAYWRIGHT_FETCH_TOOL: dict[str, Any] = {
-    "name": "playwright_fetch",
-    "description": (
-        "Fetch a fully-rendered web page (JavaScript executed) when web_fetch "
-        "returns thin or empty content. Use ONLY when web_fetch fails for "
-        "a product page. Returns the visible text of the rendered DOM."
+PLAYWRIGHT_FETCH_DECLARATION = types.FunctionDeclaration(
+    name="playwright_fetch",
+    description=(
+        "Fetch a fully-rendered web page (JavaScript executed) when url_context "
+        "returns thin or empty content. Use ONLY after url_context fails for a "
+        "product page. Returns the visible text of the rendered DOM."
     ),
-    "input_schema": {
-        "type": "object",
+    parameters={
+        "type": "OBJECT",
         "properties": {
             "url": {
-                "type": "string",
+                "type": "STRING",
                 "description": "Fully-qualified URL of the product page to render.",
             },
             "wait_for_selector": {
-                "type": "string",
+                "type": "STRING",
                 "description": (
                     "Optional CSS selector to wait for before extracting text. "
                     "Use when the page has skeletal HTML that hydrates async."
@@ -74,11 +66,13 @@ PLAYWRIGHT_FETCH_TOOL: dict[str, Any] = {
         },
         "required": ["url"],
     },
-}
+)
+
+PLAYWRIGHT_TOOL = types.Tool(function_declarations=[PLAYWRIGHT_FETCH_DECLARATION])
 
 
-def client_tools() -> list[dict[str, Any]]:
-    return [PLAYWRIGHT_FETCH_TOOL]
+def client_tools() -> list[types.Tool]:
+    return [PLAYWRIGHT_TOOL]
 
 
 # ---- Playwright execution ----------------------------------------------
@@ -152,20 +146,21 @@ async def shutdown_browser() -> None:
         _BROWSER = None
 
 
-# ---- Client-tool dispatcher ---------------------------------------------
+# ---- Function-call dispatcher ------------------------------------------
 
 ToolInput = dict[str, Any]
 
 
-async def dispatch_client_tool(name: str, tool_input: ToolInput) -> str:
-    """Route a model ``tool_use`` block to its handler.
+async def dispatch_function_call(name: str, args: ToolInput) -> dict[str, Any]:
+    """Execute a Gemini ``FunctionCall`` and return the response payload.
 
-    Server tools (web_search / web_fetch) never reach here — Anthropic runs
-    them and the message stream contains the results directly.
+    Server tools (google_search, url_context) never reach here — Gemini runs
+    them inline and exposes results via grounding metadata.
     """
     if name == "playwright_fetch":
-        url = tool_input.get("url")
+        url = args.get("url")
         if not isinstance(url, str):
-            return "[playwright_fetch error] missing url"
-        return await playwright_fetch(url, tool_input.get("wait_for_selector"))
-    return f"[dispatch error] unknown client tool: {name!r}"
+            return {"error": "playwright_fetch: missing url"}
+        text = await playwright_fetch(url, args.get("wait_for_selector"))
+        return {"content": text}
+    return {"error": f"unknown client tool: {name!r}"}

@@ -2,15 +2,16 @@
 
 The conversation lives entirely in ``intents.clarifying_turns``:
 - ``[{"role":"user","text":raw_query}]`` is the initial state inserted by the UI.
-- We call Claude with a forced ``submit_response`` tool whose schema is either
-  ``{"action":"ask","question":...}`` or ``{"action":"ready","spec":{...}}``.
+- We call Gemini with ``response_mime_type='application/json'`` and a Pydantic
+  ``IntakeResponse`` schema — the model is forced to return either ``ask`` or
+  ``ready`` in a single structured object.
 - If ``ask``: append ``{"role":"assistant","text":question}``; status stays
   ``eliciting``; the dispatcher clears ``picked_up_at`` so the next user reply
   re-triggers us.
 - If ``ready``: write the spec onto the intent and flip status to ``ready`` so
   the planner band picks it up on the next poll.
 
-Hard cap: two rounds total. On the second call we instruct Claude to commit
+Hard cap: two rounds total. On the second call we instruct Gemini to commit
 to a spec even with partial info — better a directed search than a stalled UX.
 """
 
@@ -21,8 +22,11 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from app.anthropic_client import get_client
+from google.genai import types
+from pydantic import BaseModel
+
 from app.config import settings
+from app.genai_client import get_client
 
 log = logging.getLogger(__name__)
 
@@ -35,7 +39,7 @@ spec is what downstream agents will use to search and evaluate products.
 
 You may ask AT MOST one clarifying question to fill in the most important
 missing field. If you have enough information OR you have already asked one
-question, call submit_response with action="ready" and return the spec.
+question, return action="ready" with the spec.
 
 A good spec includes (use null for unknowns):
 - product_class: short noun phrase (e.g. "used iPhone 15 Pro", "noise-cancelling headphones")
@@ -49,38 +53,22 @@ A good spec includes (use null for unknowns):
 
 Be concise. Never ask multiple questions at once."""
 
-RESPONSE_TOOL: dict[str, Any] = {
-    "name": "submit_response",
-    "description": (
-        "Submit either a clarifying question for the user OR a finalized shopping spec. "
-        "Choose action='ask' only when you genuinely cannot proceed without one more answer."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "action": {"type": "string", "enum": ["ask", "ready"]},
-            "question": {
-                "type": "string",
-                "description": "Required when action='ask'. One concise question.",
-            },
-            "spec": {
-                "type": "object",
-                "description": "Required when action='ready'. The structured spec.",
-                "properties": {
-                    "product_class": {"type": ["string", "null"]},
-                    "budget_cents": {"type": ["integer", "null"]},
-                    "condition": {"type": ["string", "null"]},
-                    "must_haves": {"type": "array", "items": {"type": "string"}},
-                    "deal_breakers": {"type": "array", "items": {"type": "string"}},
-                    "retailer_preferences": {"type": "array", "items": {"type": "string"}},
-                    "shipping_speed": {"type": ["string", "null"]},
-                    "notes": {"type": ["string", "null"]},
-                },
-            },
-        },
-        "required": ["action"],
-    },
-}
+
+class IntakeSpec(BaseModel):
+    product_class: str | None = None
+    budget_cents: int | None = None
+    condition: str | None = None
+    must_haves: list[str] = []
+    deal_breakers: list[str] = []
+    retailer_preferences: list[str] = []
+    shipping_speed: str | None = None
+    notes: str | None = None
+
+
+class IntakeResponse(BaseModel):
+    action: Literal["ask", "ready"]
+    question: str | None = None
+    spec: IntakeSpec | None = None
 
 
 @dataclass
@@ -94,22 +82,29 @@ def _count_assistant_turns(turns: list[dict[str, Any]]) -> int:
     return sum(1 for t in turns if t.get("role") == "assistant")
 
 
-def _build_transcript(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert the stored ``clarifying_turns`` array into Anthropic messages.
+def _build_contents(turns: list[dict[str, Any]]) -> list[types.Content]:
+    """Convert stored clarifying_turns into Gemini's Content list.
 
     Stored turn shape: ``{"role": "user"|"assistant", "text": "..."}``.
+    Gemini uses ``role='model'`` instead of ``'assistant'``.
     """
-    msgs: list[dict[str, Any]] = []
+    out: list[types.Content] = []
     for t in turns:
-        role = t.get("role")
+        role_in = t.get("role")
         text = t.get("text", "")
-        if role in ("user", "assistant") and text:
-            msgs.append({"role": role, "content": text})
-    if not msgs:
-        # Defensive: shouldn't happen since UI inserts an initial user turn,
-        # but if it does, give the model SOMETHING to work with.
-        msgs.append({"role": "user", "content": "(no initial query provided)"})
-    return msgs
+        if not text:
+            continue
+        if role_in == "user":
+            role = "user"
+        elif role_in == "assistant":
+            role = "model"
+        else:
+            continue
+        out.append(types.Content(role=role, parts=[types.Part(text=text)]))
+    if not out:
+        # Defensive: shouldn't happen since UI inserts an initial user turn.
+        out.append(types.Content(role="user", parts=[types.Part(text="(no initial query provided)")]))
+    return out
 
 
 async def run_intake(
@@ -119,55 +114,54 @@ async def run_intake(
     """Run one intake turn. Returns ask or ready.
 
     ``raw_query`` is informational (already first in clarifying_turns). The
-    caller is responsible for persisting the result.
+    caller persists the result.
     """
     rounds_used = _count_assistant_turns(clarifying_turns)
-    must_finalize = rounds_used >= MAX_ROUNDS - 1  # i.e. on or past the cap
+    must_finalize = rounds_used >= MAX_ROUNDS - 1
 
-    transcript = _build_transcript(clarifying_turns)
+    contents = _build_contents(clarifying_turns)
 
     system = SYSTEM_PROMPT
     if must_finalize:
         system += (
             "\n\nIMPORTANT: You have already asked your one clarifying question, "
-            "OR this is the cap. You MUST call submit_response with action='ready' "
-            "and your best-effort spec from what you have. Do not ask again."
+            "OR this is the cap. You MUST return action='ready' with your "
+            "best-effort spec from what you have. Do not ask again."
         )
 
     client = get_client()
     log.info(
-        "intake: rounds_used=%d must_finalize=%s transcript_len=%d",
+        "intake: rounds_used=%d must_finalize=%s contents_len=%d",
         rounds_used,
         must_finalize,
-        len(transcript),
-    )
-    resp = await client.messages.create(
-        model=settings.anthropic_model_researcher,
-        max_tokens=1024,
-        system=system,
-        messages=transcript,
-        tools=[RESPONSE_TOOL],
-        tool_choice={"type": "tool", "name": "submit_response"},
+        len(contents),
     )
 
-    tool_block = next((b for b in resp.content if getattr(b, "type", None) == "tool_use"), None)
-    if tool_block is None:
-        log.error("intake: no tool_use block in response: %s", resp.content)
-        return IntakeResult(action="ready", spec={"raw_query": raw_query})
+    resp = await client.aio.models.generate_content(
+        model=settings.gemini_model_researcher,
+        contents=contents,
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            response_mime_type="application/json",
+            response_schema=IntakeResponse,
+            max_output_tokens=1024,
+        ),
+    )
 
-    payload: dict[str, Any] = tool_block.input  # type: ignore[assignment]
-    action = payload.get("action")
+    parsed: IntakeResponse | None = getattr(resp, "parsed", None)
+    if parsed is None:
+        # Fall back to parsing the text payload manually.
+        try:
+            data = json.loads(resp.text or "{}")
+            parsed = IntakeResponse(**data)
+        except Exception as e:
+            log.error("intake: could not parse response: %s; raw=%s", e, resp.text)
+            return IntakeResult(action="ready", spec={"raw_query": raw_query})
 
-    if action == "ask" and not must_finalize:
-        q = (payload.get("question") or "").strip()
-        if q:
-            return IntakeResult(action="ask", question=q)
-        # If model asked but produced no question, treat as ready with what we have.
+    if parsed.action == "ask" and not must_finalize and parsed.question:
+        return IntakeResult(action="ask", question=parsed.question.strip())
 
-    spec = payload.get("spec") or {}
-    if not isinstance(spec, dict):
-        spec = {}
-    # Carry forward the raw query for downstream agents to reference.
+    spec = (parsed.spec.model_dump(exclude_none=False) if parsed.spec else {})
     spec.setdefault("raw_query", raw_query)
     log.debug("intake: ready spec=%s", json.dumps(spec)[:400])
     return IntakeResult(action="ready", spec=spec)
