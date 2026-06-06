@@ -94,7 +94,10 @@ async def fetch_page_meta(url: str, timeout: float = 8.0) -> PageMeta:
     """Best-effort fetch of OpenGraph meta tags for a product page.
 
     Returns an empty PageMeta on any error (4xx, 5xx, timeout, missing tags).
-    Never raises — caller treats absence as "no data".
+    Also validates the discovered image URL with a HEAD request — retailers
+    frequently publish stale or wrong ``og:image`` URLs, and storing a broken
+    one is worse than storing nothing because the dashboard reserves space
+    for a tile thumbnail. Never raises.
     """
     try:
         async with httpx.AsyncClient(
@@ -112,9 +115,34 @@ async def fetch_page_meta(url: str, timeout: float = 8.0) -> PageMeta:
                 return PageMeta()
             html = r.text[:65536]
             base = str(r.url)
-            return _parse_meta(html, base)
+            meta = _parse_meta(html, base)
+            if meta.image_url and not await _is_image_ok(client, meta.image_url, base):
+                log.info("page_meta: dropping broken image %s", meta.image_url)
+                meta.image_url = None
+            return meta
     except asyncio.CancelledError:
         raise
     except Exception as e:
         log.debug("page_meta: fetch failed for %s: %s", url, e)
         return PageMeta()
+
+
+async def _is_image_ok(client: httpx.AsyncClient, img_url: str, referer: str) -> bool:
+    """HEAD-probe ``img_url`` with a browser-like Referer matching the source
+    page. Returns True only if the response is 2xx and looks like an image.
+    Some CDNs reject HEAD — for those, fall back to a small Range GET.
+    """
+    headers = {"Referer": referer}
+    try:
+        r = await client.head(img_url, headers=headers)
+    except Exception:
+        return False
+    if r.status_code < 400 and "image" in (r.headers.get("content-type") or ""):
+        return True
+    if r.status_code in (405, 501):
+        try:
+            r = await client.get(img_url, headers={**headers, "Range": "bytes=0-127"})
+            return r.status_code < 400 and "image" in (r.headers.get("content-type") or "")
+        except Exception:
+            return False
+    return False

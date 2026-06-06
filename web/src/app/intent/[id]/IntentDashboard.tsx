@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   insforge,
+  imgProxy,
   isConfigured,
   type Alternative,
   type CandidateRow,
@@ -225,12 +226,12 @@ function CandidateTile({
       </div>
 
       {f?.image_url ? (
-        // Untrusted retailer image: use plain <img> so Next.js doesn't reject
-        // arbitrary remote hosts. Fixed aspect via wrapper, object-cover crops.
+        // Routed through the orchestrator's /img proxy so retailer hotlink
+        // protection (Referer / hostname checks) doesn't break the load.
         <div className="mt-3 aspect-video w-full overflow-hidden rounded-md bg-neutral-100">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={f.image_url}
+            src={imgProxy(f.image_url)}
             alt={candidate.title}
             className="h-full w-full object-cover"
             loading="lazy"
@@ -323,9 +324,12 @@ function TopPickPanel({
           <div className="aspect-square w-full max-w-[180px] overflow-hidden rounded-md bg-white">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={f.image_url}
+              src={imgProxy(f.image_url)}
               alt={candidate.title}
               className="h-full w-full object-cover"
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = "none";
+              }}
             />
           </div>
         )}
