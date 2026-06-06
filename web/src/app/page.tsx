@@ -67,7 +67,7 @@ export default function Home() {
           onChange={(e) => setQ(e.target.value)}
           rows={4}
           placeholder="e.g. used iPhone 15 Pro 256GB, prefer unlocked, under $700, 90%+ battery"
-          className="w-full rounded-lg border border-neutral-300 bg-white px-4 py-3 text-sm shadow-sm outline-none focus:border-neutral-900"
+          className="w-full rounded-lg border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 placeholder:text-neutral-400 shadow-sm outline-none focus:border-neutral-900"
         />
         <button
           type="submit"

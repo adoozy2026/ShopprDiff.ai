@@ -34,6 +34,7 @@ subscribes to `intent:<id>` to react.
 
 ```
 migrations/      SQL — applied via `npx @insforge/cli db migrations up --all`
+scripts/         One-shot setup helpers (e.g. realtime channel registration)
 orchestrator/    FastAPI service — runs on your laptop
 web/             Next.js app — deploys to Vercel
 ```
@@ -56,6 +57,15 @@ web/             Next.js app — deploys to Vercel
    This applies `migrations/<timestamp>_init.sql`.
 5. From the dashboard, copy the **Project URL**, **anon key**, and
    **service role key**.
+6. **Bootstrap realtime channel patterns** — Insforge requires patterns to be
+   registered before clients can subscribe. After `.env` is filled (step 3),
+   run:
+   ```bash
+   ./scripts/bootstrap-realtime.sh
+   ```
+   This idempotently registers the `intent:%` pattern the dashboard relies on
+   for live updates. **Skip this and `insforge.realtime.subscribe()` fails with
+   an opaque `{}` error.**
 
 ### 2. Google AI Studio (Gemini)
 

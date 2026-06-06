@@ -233,7 +233,7 @@ function IntakeSection({ intent }: { intent: IntentRow | null }) {
             value={reply}
             onChange={(e) => setReply(e.target.value)}
             placeholder="Type your answer…"
-            className="flex-1 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-900"
+            className="flex-1 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 outline-none focus:border-neutral-900"
             autoFocus
           />
           <button
