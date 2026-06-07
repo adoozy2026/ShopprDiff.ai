@@ -59,8 +59,6 @@ Every stage writes progress back to InsForge. Database triggers publish events o
 
 6. **Decoupled architecture.** The orchestrator runs on your laptop (outbound-only — no inbound ports, no tunnels). InsForge provides the database, auth, and realtime pub/sub as a managed service. The frontend deploys to Vercel. Each layer scales and deploys independently.
 
-7. **Graceful degradation.** Fixture mode (`FIXTURE_MODE=true`) serves seeded mock data when API providers rate-limit or go down — the demo never breaks on stage. Skeleton mode works even before InsForge is wired up.
-
 ---
 
 ## Feature Expansion Roadmap
