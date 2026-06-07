@@ -60,15 +60,22 @@ _NON_PRODUCT_DOMAINS = {
 SYSTEM_PROMPT = """You are a search planner for a personal shopping service.
 
 You will be given a structured shopping spec. Your job is to find product
-listings the user could actually buy. Use the google_search tool to run 2-3
-queries: one broad ("<product class> <key constraints>"), plus 1-2 narrower
-retailer-scoped queries (e.g. "site:ebay.com <product>", "site:swappa.com
-<product>") matching the user's retailer preferences if any. Prefer retailer
-product pages over reviews, articles, or social media.
+listings the user could actually buy. Use the google_search tool to run 3-4
+queries: one broad ("<product class> <key constraints>"), plus 2-3 narrower
+retailer-scoped queries — INCLUDING `site:amazon.com <product>` as one of
+them. Other useful retailers: `site:ebay.com`, `site:bestbuy.com`,
+`site:walmart.com`, `site:target.com`, `site:swappa.com`, `site:newegg.com`,
+plus any in the spec's retailer_preferences. Prefer retailer product pages
+over reviews, articles, or social media.
 
-CRITICAL: Honor the spec's deal_breakers strictly. If the user said anything
-like "US-based seller" or "ships from the US", restrict your queries to US
-retailers — append `site:.com OR site:.us` or `"ships from United States"`
+CRITICAL: ALWAYS include an `site:amazon.com` query among your search calls.
+Google's grounded results underweight Amazon in shopping contexts; without an
+explicit site-scoped query, Amazon listings vanish from results, which hurts
+price comparison.
+
+ALSO CRITICAL: Honor the spec's deal_breakers strictly. If the user said
+anything like "US-based seller" or "ships from the US", restrict your queries
+to US retailers — append `site:.com OR site:.us` or `"ships from United States"`
 to broaden away from foreign listings. Never return links from .com.my,
 .com.au, .co.uk, .de, .fr, .es, .it, .nl, .ca etc. when a US-only
 constraint applies. The dashboard will hard-filter these afterward; you
@@ -203,14 +210,17 @@ async def run_planner(intent_id: str, spec: dict[str, Any]) -> list[CandidateDra
 
     primary = f"{product_class} {budget_str}{us_only_hint}".strip()
     secondary = f"{product_class} {must_haves}".strip() if must_haves else primary
+    amazon = f"site:amazon.com {product_class} {budget_str}".strip()
 
     user_msg = (
-        "You MUST call the google_search tool at least twice — once with the "
-        "PRIMARY query, once with the SECONDARY query — to surface product "
-        "listings. Do NOT answer from prior knowledge; product URLs are only "
-        "useful if Google returned them.\n\n"
+        "You MUST call the google_search tool at least THREE times — once "
+        "with the PRIMARY query, once with the SECONDARY query, and once "
+        "with the AMAZON query — to surface product listings. Do NOT answer "
+        "from prior knowledge; product URLs are only useful if Google "
+        "returned them.\n\n"
         f"PRIMARY query: {primary!r}\n"
-        f"SECONDARY query: {secondary!r}\n\n"
+        f"SECONDARY query: {secondary!r}\n"
+        f"AMAZON query: {amazon!r}\n\n"
         f"Full spec for reference:\n{json.dumps(spec, indent=2)}"
     )
 
@@ -277,8 +287,20 @@ async def _resolve_grounding_redirects(
 ) -> list[tuple[str, str]]:
     """Follow any Gemini grounding redirects to their real destination.
 
-    URLs that aren't grounding redirects pass through unchanged. Resolution
-    failures fall back to the original URL.
+    Two important quirks this handles:
+
+    1. ``HEAD`` is unreliable. Amazon's CDN (and a few others) reject
+       non-browser-fingerprint HEAD requests with 4xx/5xx, which made the
+       previous implementation lose every Amazon URL the model returned. We
+       use ``GET`` with a ``Range: bytes=0-0`` to download essentially
+       nothing while still triggering the full redirect chain + presenting
+       as a normal browser navigation.
+
+    2. ``r.status_code`` doesn't matter for our purpose — even when the
+       destination returns 403, httpx has *already* followed the redirect
+       chain and ``r.url`` is the resolved URL we want. We only fall back to
+       the original (unresolved vertexai redirect) when the request itself
+       errored out before reaching the chain end.
     """
     needs_resolve = [
         (i, u)
@@ -290,13 +312,20 @@ async def _resolve_grounding_redirects(
 
     async with httpx.AsyncClient(
         follow_redirects=True,
-        timeout=8.0,
-        headers={"User-Agent": _BROWSER_UA},
+        timeout=10.0,
+        headers={
+            "User-Agent": _BROWSER_UA,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Range": "bytes=0-0",
+        },
     ) as client:
 
         async def resolve(idx: int, url: str) -> tuple[int, str]:
             try:
-                r = await client.head(url)
+                r = await client.get(url)
+                # str(r.url) is the post-redirect URL even when the final
+                # response is 4xx — exactly what we want for filtering.
                 return idx, str(r.url)
             except Exception as e:
                 log.debug("redirect resolve failed for %s: %s", url, e)
