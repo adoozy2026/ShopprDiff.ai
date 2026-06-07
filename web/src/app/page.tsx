@@ -287,8 +287,11 @@ export default function Home() {
         Personalized Shoppr
       </h1>
       <p className="mt-2 text-sm text-neutral-500">
-        Tell me what you&apos;re shopping for. I&apos;ll dispatch a team of agents to
-        research it.
+        Describe what you&apos;re looking for and your personalized shoppr will
+        go to work — scouring the web to research your product, comparing
+        prices across dozens of retailers to find the best deal, and
+        recommending the most trustworthy sellers so you can buy with
+        confidence.
       </p>
 
       <form onSubmit={submit} className="mt-8 space-y-3">
