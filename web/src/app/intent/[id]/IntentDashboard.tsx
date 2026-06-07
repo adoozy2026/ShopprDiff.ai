@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   insforge,
   imgProxy,
@@ -218,6 +218,14 @@ function CandidateTile({
   const step = finding?.step;
   const scam = f?.scam_score;
   const scamReasons = f?.scam_reasons ?? [];
+  const [showDetails, setShowDetails] = useState(false);
+
+  const knownIssues = f?.known_issues ?? [];
+  const hasDetails =
+    Boolean(pick?.detail) ||
+    Boolean(f?.seller_rep) ||
+    knownIssues.length > 0 ||
+    (scamReasons.length > 0 && scam != null && scam >= 40);
 
   return (
     <div
@@ -296,31 +304,81 @@ function CandidateTile({
       )}
 
       {f?.description_summary && (
-        <p className="mt-2 line-clamp-3 text-xs text-neutral-600">
-          {f.description_summary}
-        </p>
+        <ExpandableText
+          text={f.description_summary}
+          clampLines={3}
+          className="mt-2 text-xs text-neutral-600"
+        />
       )}
 
       <dl className="mt-3 space-y-1 text-xs text-neutral-700">
         {f?.seller && (
           <div className="flex justify-between gap-2">
-            <dt className="text-neutral-500">seller</dt>
-            <dd className="truncate text-right">{f.seller}</dd>
+            <dt className="shrink-0 text-neutral-500">seller</dt>
+            <dd className="break-words text-right">{f.seller}</dd>
           </div>
         )}
         {f?.shipping_speed && (
           <div className="flex justify-between gap-2">
-            <dt className="text-neutral-500">shipping</dt>
-            <dd className="truncate text-right">{f.shipping_speed}</dd>
+            <dt className="shrink-0 text-neutral-500">shipping</dt>
+            <dd className="break-words text-right">{f.shipping_speed}</dd>
           </div>
         )}
         {f?.return_policy && (
           <div className="flex justify-between gap-2">
-            <dt className="text-neutral-500">returns</dt>
-            <dd className="truncate text-right">{f.return_policy}</dd>
+            <dt className="shrink-0 text-neutral-500">returns</dt>
+            <dd className="break-words text-right">{f.return_policy}</dd>
           </div>
         )}
       </dl>
+
+      {hasDetails && (
+        <div className="mt-3">
+          {showDetails ? (
+            <div className="space-y-2 rounded-md bg-neutral-50 p-3 text-xs text-neutral-800">
+              {pick?.detail && (
+                <Section label="Agent take">{pick.detail}</Section>
+              )}
+              {f?.seller_rep && (
+                <Section label="Seller reputation">{f.seller_rep}</Section>
+              )}
+              {knownIssues.length > 0 && (
+                <Section label="Known issues">
+                  <ul className="list-disc space-y-0.5 pl-4">
+                    {knownIssues.map((k, i) => (
+                      <li key={i}>{k}</li>
+                    ))}
+                  </ul>
+                </Section>
+              )}
+              {scam != null && scam >= 40 && scamReasons.length > 0 && (
+                <Section label="Risk flags">
+                  <ul className="list-disc space-y-0.5 pl-4">
+                    {scamReasons.map((r, i) => (
+                      <li key={i}>{r}</li>
+                    ))}
+                  </ul>
+                </Section>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowDetails(false)}
+                className="mt-1 text-[11px] font-medium text-neutral-600 underline hover:text-neutral-900"
+              >
+                Show less
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowDetails(true)}
+              className="text-[11px] font-medium text-neutral-600 underline hover:text-neutral-900"
+            >
+              Show details ↓
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="mt-auto pt-3" />
 
@@ -441,6 +499,66 @@ function TopPickPanel({
         </div>
       )}
     </section>
+  );
+}
+
+function Section({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-500">
+        {label}
+      </div>
+      <div className="text-neutral-800">{children}</div>
+    </div>
+  );
+}
+
+function ExpandableText({
+  text,
+  clampLines = 3,
+  className,
+}: {
+  text: string;
+  clampLines?: number;
+  className?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const ref = useRef<HTMLParagraphElement>(null);
+
+  useEffect(() => {
+    if (!ref.current || expanded) return;
+    // scrollHeight > clientHeight (accounting for 1px rounding) means the
+    // visible clamp is hiding content the user might want to read.
+    setOverflowing(ref.current.scrollHeight > ref.current.clientHeight + 1);
+  }, [text, expanded, clampLines]);
+
+  // Inline style is cleaner than maintaining N tailwind classes for arbitrary
+  // line-clamp values; works in all evergreen browsers.
+  const clampStyle = expanded
+    ? undefined
+    : {
+        display: "-webkit-box" as const,
+        WebkitBoxOrient: "vertical" as const,
+        WebkitLineClamp: clampLines,
+        overflow: "hidden",
+      };
+
+  return (
+    <div className={className}>
+      <p ref={ref} style={clampStyle} className="leading-snug">
+        {text}
+      </p>
+      {(overflowing || expanded) && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-0.5 text-[11px] font-medium text-neutral-600 underline hover:text-neutral-900"
+        >
+          {expanded ? "Read less" : "Read more…"}
+        </button>
+      )}
+    </div>
   );
 }
 
