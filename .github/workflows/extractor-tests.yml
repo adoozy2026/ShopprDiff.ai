@@ -1,0 +1,30 @@
+name: extractor tests
+
+on:
+  pull_request:
+    paths:
+      - "orchestrator/**"
+      - ".github/workflows/extractor-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "orchestrator/**"
+      - ".github/workflows/extractor-tests.yml"
+
+jobs:
+  golden:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: orchestrator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install dependencies
+        run: uv sync
+      - name: Run extractor golden tests
+        run: uv run pytest tests/ -v
