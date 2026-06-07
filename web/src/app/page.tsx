@@ -284,7 +284,7 @@ export default function Home() {
   return (
     <main className="mx-auto max-w-2xl px-6 py-24">
       <h1 className="text-3xl font-semibold tracking-tight">
-        Personal shopper agent
+        Personalized Shoppr
       </h1>
       <p className="mt-2 text-sm text-neutral-500">
         Tell me what you&apos;re shopping for. I&apos;ll dispatch a team of agents to
