@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     replicas_cli_path: str = "/Users/andrewwang/.bun/bin/replicas"
     replicas_min_runs: int = 3
     replicas_target_repo: str = "adoozy2026/insforge-hack"
+    # ID from `replicas env list`. Without it the CLI shows an interactive
+    # "Select environment" picker and our subprocess hangs / no-ops because
+    # we don't have a TTY attached. Find the right one by running:
+    #   replicas env list
+    # and copying the "Default <org>/<repo>" ID.
+    replicas_environment_id: str = ""
 
 
 settings = Settings()

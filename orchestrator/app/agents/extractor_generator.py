@@ -212,34 +212,44 @@ def _build_bundle(domain: str, runs: list[dict[str, Any]]) -> str:
 
 async def _spawn_replica(cli: str, name: str, bundle: str) -> tuple[str | None, str, bool]:
     """Returns (replica_id, log_excerpt, ok)."""
+    args = [
+        cli,
+        "create",
+        name,
+        "--agent",
+        "claude",
+        "--message",
+        bundle,
+    ]
+    # Without --environment, the CLI emits an interactive "Select environment"
+    # picker and our piped subprocess hangs/no-ops because we don't have a TTY.
+    # The user finds the ID via `replicas env list` (look for
+    # "Default <org>/<repo>").
+    if settings.replicas_environment_id:
+        args.extend(["--environment", settings.replicas_environment_id])
+
     try:
         proc = await asyncio.create_subprocess_exec(
-            cli,
-            "create",
-            name,
-            "--agent",
-            "claude",
-            "--message",
-            bundle,
+            *args,
+            # Explicit /dev/null stdin so the CLI doesn't think it's
+            # interactive even when other args are missing.
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
     except FileNotFoundError as e:
         return None, f"cli not executable: {e}", False
     try:
-        out_b, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+        out_b, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
     except asyncio.TimeoutError:
         try:
             proc.kill()
         except Exception:
             pass
-        return None, "replicas create timed out after 60s", False
+        return None, "replicas create timed out after 120s", False
 
     out = (out_b or b"").decode("utf-8", "replace")
     rc = proc.returncode or 0
-    if rc != 0:
-        log.warning("replicas create rc=%d output=%r", rc, out[:400])
-        return None, out, False
 
     # The CLI prints something like:
     #   Replica created: <name>
@@ -250,5 +260,19 @@ async def _spawn_replica(cli: str, name: str, bundle: str) -> tuple[str | None, 
         if line.startswith("ID:") or line.startswith("ID :"):
             replica_id = line.split(":", 1)[1].strip()
             break
+
+    # If we returned 0 but never parsed an ID, the CLI silently no-op'd —
+    # most often because it sat on an interactive prompt that timed out
+    # without doing anything. Treat that as failure so the job row gets
+    # marked failed and isn't blocking retries.
+    if rc != 0 or replica_id is None:
+        log.warning(
+            "replicas create no-op rc=%d id=%s output=%r",
+            rc,
+            replica_id,
+            out[:400],
+        )
+        return replica_id, out, False
+
     log.info("replicas create ok name=%s id=%s", name, replica_id)
     return replica_id, out, True
