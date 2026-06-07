@@ -526,9 +526,46 @@ async def extract_from_text(text: str) -> dict[str, Any]:
         return {}
     snippet = text[:6000]
     gem = get_client()
+
+    flash = await _reextract_one(gem, snippet, settings.gemini_model_researcher)
+    flash_dict = (
+        {k: v for k, v in flash.model_dump(exclude_none=False).items() if v is not None}
+        if flash
+        else {}
+    )
+
+    # Flash is fast and cheap; when it finds the price, we're done.
+    if flash_dict.get("price_cents"):
+        return flash_dict
+
+    # Flash missed the price. Pro is meaningfully better at locating money
+    # buried in messy DOM text (Apple's "From $X,XXX" right next to a
+    # "Total: $Y,YYY" cluster, eBay variant grids, Newegg bundles). Cost is
+    # at most one extra pro call per missed-price candidate × up to 2
+    # escalations per intent — trivial vs. demo failure rate.
+    pro = await _reextract_one(gem, snippet, settings.gemini_model_synthesizer)
+    pro_dict = (
+        {k: v for k, v in pro.model_dump(exclude_none=False).items() if v is not None}
+        if pro
+        else {}
+    )
+
+    # Merge: pro wins for anything it filled, flash fills the rest. Don't
+    # blindly overwrite flash's good fields with pro's nulls.
+    merged = dict(flash_dict)
+    for k, v in pro_dict.items():
+        if v not in (None, ""):
+            merged[k] = v
+    return merged
+
+
+async def _reextract_one(
+    gem: Any, snippet: str, model: str
+) -> _ConfiguredFacts | None:
+    """One re-extract pass against a Gemini model. Returns None on failure."""
     try:
         resp = await gem.aio.models.generate_content(
-            model=settings.gemini_model_researcher,
+            model=model,
             contents=snippet + "\n\n" + _REEXTRACT_JSON,
             config=types.GenerateContentConfig(
                 system_instruction=_REEXTRACT_SYSTEM,
@@ -538,17 +575,17 @@ async def extract_from_text(text: str) -> dict[str, Any]:
             ),
         )
     except Exception as e:
-        log.warning("configurator: re-extract failed: %s", e)
-        return {}
+        log.warning("configurator: re-extract (%s) failed: %s", model, e)
+        return None
 
     parsed: _ConfiguredFacts | None = getattr(resp, "parsed", None)
-    if parsed is None:
-        try:
-            data = json.loads(resp.text or "{}")
-            parsed = _ConfiguredFacts(**data)
-        except Exception:
-            return {}
-    return {k: v for k, v in parsed.model_dump(exclude_none=False).items() if v is not None}
+    if parsed is not None:
+        return parsed
+    try:
+        data = json.loads(resp.text or "{}")
+        return _ConfiguredFacts(**data)
+    except Exception:
+        return None
 
 
 __all__ = [

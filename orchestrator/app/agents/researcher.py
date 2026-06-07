@@ -217,6 +217,20 @@ async def run_researcher(
             # cheap and unlocks the pool the moment we flip the flag.
             try:
                 facts_now = listing.model_dump(exclude_none=True)
+                # "Successful sample" for Replicas trigger purposes is more
+                # generous than "found the configured price". A run where the
+                # agent navigated a real product page and pulled SOME concrete
+                # facts is still high-signal training data — the action
+                # history tells the cloud agent what worked. Strict price-only
+                # gating was driving the demo-day failure ("PR didn't fire
+                # because page didn't surface a clean price").
+                got_useful_data = bool(
+                    listing.price_cents
+                    or (
+                        listing.title
+                        and (listing.seller or listing.condition or listing.image_url)
+                    )
+                )
                 await client.insert(
                     "extractor_runs",
                     {
@@ -227,7 +241,7 @@ async def run_researcher(
                         "spec": spec,
                         "action_history": finding.get("configurator_history") or [],
                         "extracted_facts": facts_now,
-                        "succeeded": bool(listing.price_cents),
+                        "succeeded": got_useful_data,
                     },
                 )
             except Exception as e:
