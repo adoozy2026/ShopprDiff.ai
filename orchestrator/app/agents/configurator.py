@@ -28,7 +28,6 @@ import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal
-from urllib.parse import urlparse
 
 from google.genai import types
 from pydantic import BaseModel
@@ -48,32 +47,10 @@ _NAV_TIMEOUT_MS = 20_000
 _ACTION_TIMEOUT_MS = 8_000
 _WAIT_AFTER_ACTION_MS = 1500
 
-# URL host substrings that almost always need configuration to surface real
-# prices. We escalate on these even when url_context returned a price (the
-# static price is often misleading — "starting at").
-CONFIGURABLE_DOMAINS = (
-    "apple.com",
-    "bestbuy.com",
-    "dell.com",
-    "hp.com",
-    "lenovo.com",
-    "newegg.com/p/configure",
-    "samsung.com",
-    "asus.com",
-    "configure",  # any URL with /configure/ path
-)
-
-
 def should_escalate(url: str, price_cents: int | None) -> bool:
     """Decide whether to invoke the browser agent on this candidate."""
     if not url:
         return False
-    parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
-    path = (parsed.path or "").lower()
-    for needle in CONFIGURABLE_DOMAINS:
-        if needle in host or needle in path:
-            return True
     # If static extraction couldn't find a price, give the browser a shot.
     return price_cents is None
 
@@ -589,7 +566,6 @@ async def _reextract_one(
 
 
 __all__ = [
-    "CONFIGURABLE_DOMAINS",
     "ConfigResult",
     "configure_and_extract",
     "extract_from_text",
