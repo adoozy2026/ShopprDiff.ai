@@ -19,9 +19,8 @@ which was indistinguishable from a Google Shopping top-N. This one produces:
   * ``alternatives`` adjacent paths worth considering — cheaper variant,
                     refurb route, "if you can wait" angle.
 
-JSON-as-text output is parsed defensively because Gemini's response_schema
-mode conflicts with tool use, and pro models occasionally wrap output in
-code fences.
+JSON-as-text output is parsed defensively because LLM responses occasionally
+wrap output in code fences.
 """
 
 from __future__ import annotations
@@ -30,12 +29,11 @@ import json
 import logging
 from typing import Any
 
-from google.genai import types
 from pydantic import BaseModel
 
 from app.config import settings
 from app.db.client import InsforgeClient
-from app.genai_client import get_client
+from app.genai_client import get_client, rate_limiter
 
 log = logging.getLogger(__name__)
 
@@ -240,29 +238,25 @@ async def run_synthesizer(
         + _JSON_INSTRUCTION
     )
     try:
-        resp = await gem.aio.models.generate_content(
-            model=settings.gemini_model_synthesizer,
-            contents=user_msg,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                # 8192 because the schema can easily exceed 4096:
-                # picks × N + tradeoffs × ~4 + warnings + alternatives + rationale.
-                # The previous 4096 truncated JSON mid-string and silently 404'd
-                # the recommendation row.
-                max_output_tokens=8192,
-            ),
+        await rate_limiter.acquire()
+        resp = await gem.chat.completions.create(
+            model=settings.deepseek_model_synthesizer,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=8192,
         )
     except Exception as e:
         log.warning("synthesizer call failed: %s", e)
         return SynthOutput()
-    # Surface stop_reason so silent truncation is visible in the next debug pass.
-    cands = getattr(resp, "candidates", None) or []
-    if cands:
-        reason = getattr(cands[0], "finish_reason", None)
-        if reason and str(reason) not in ("FinishReason.STOP", "1", "STOP"):
-            log.warning("synthesizer: unusual finish_reason=%s", reason)
 
-    text = _strip_code_fence(resp.text or "")
+    choice = resp.choices[0]
+    if choice.finish_reason and choice.finish_reason not in ("stop", "length"):
+        log.warning("synthesizer: unusual finish_reason=%s", choice.finish_reason)
+
+    text = _strip_code_fence(choice.message.content or "")
     data = _coerce_json_object(text)
     if data is None:
         log.warning("synthesizer: could not parse JSON; text=%r", text[:300])

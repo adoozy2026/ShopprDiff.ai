@@ -13,10 +13,10 @@ class Settings(BaseSettings):
     insforge_anon_key: str = ""
     insforge_service_role_key: str = ""
 
-    # --- Google AI Studio (Gemini) ---
-    google_api_key: str = ""
-    gemini_model_researcher: str = "gemini-3.5-flash"
-    gemini_model_synthesizer: str = "gemini-2.5-pro"
+    # --- DeepSeek ---
+    deepseek_api_key: str = ""
+    deepseek_model_researcher: str = "deepseek-chat"
+    deepseek_model_synthesizer: str = "deepseek-chat"
 
     # --- Runtime ---
     fixture_mode: bool = False

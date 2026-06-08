@@ -6,12 +6,12 @@ animates as work happens. Insforge realtime triggers fire on every UPDATE, so
 the browser sees each transition without polling.
 
 Steps:
-  1. ``fetching listing``  — Gemini url_context on source_url, structured
-     extraction of price / condition / seller / shipping / returns.
-  2. ``checking seller reputation`` — google_search of the seller name plus
-     ``reviews scam``; a one-paragraph summary lands in ``seller_rep``.
-  3. ``scanning known issues``     — google_search of the product + "common
-     problems"; bullet list lands in ``known_issues``.
+  1. ``fetching listing``  — Playwright fetch + DeepSeek extraction of
+     price / condition / seller / shipping / returns.
+  2. ``checking seller reputation`` — DeepSeek assessment of the seller
+     based on its training knowledge.
+  3. ``scanning known issues``     — DeepSeek summary of commonly reported
+     problems for the product class.
   4. ``evaluating``                — local scam scoring. No model call.
 
 Errors at any step flip the finding to ``status='error'`` with the exception
@@ -25,7 +25,6 @@ import json
 import logging
 from typing import Any
 
-from google.genai import types
 from pydantic import BaseModel
 
 from app.agents.configurator import (
@@ -36,14 +35,13 @@ from app.agents.configurator import (
 from app.agents.scam import score_scam
 from app.config import settings
 from app.db.client import InsforgeClient
-from app.genai_client import get_client
+from app.genai_client import get_client, rate_limiter
 from app.tools.page_meta import fetch_page_meta
-from app.tools.sources import GOOGLE_SEARCH_TOOL, URL_CONTEXT_TOOL
+from app.tools.sources import playwright_fetch
 
 # Cap the number of candidates per intent that get the browser-agent
 # escalation. Each escalation is +15-45s of latency and several extra
-# Gemini multimodal calls — without a cap, a single query can balloon
-# past 3 min.
+# DeepSeek calls — without a cap, a single query can balloon past 3 min.
 MAX_ESCALATIONS_PER_INTENT = 2
 
 log = logging.getLogger(__name__)
@@ -112,7 +110,7 @@ async def run_researcher(
     try:
         await step("fetching listing", "running")
         # Pull OpenGraph meta in parallel with the LLM extract. The meta
-        # scrape is free and works even when Gemini is rate-limited.
+        # scrape is free and works even when the API is rate-limited.
         (listing, spec_attrs), meta = await asyncio.gather(
             _extract_listing(candidate["source_url"], spec),
             fetch_page_meta(candidate["source_url"]),
@@ -127,10 +125,6 @@ async def run_researcher(
         await step("extracted listing", "running", listing_payload)
 
         # ---- Optional browser-agent escalation ----
-        # Configurable retailers (apple.com, bestbuy.com, ...) often hide
-        # the real price behind a variant picker. If the URL matches one,
-        # or static extraction couldn't find a price at all, open a
-        # Playwright session and have Gemini drive the page.
         if (
             escalation_budget is not None
             and escalation_budget[0] > 0
@@ -147,8 +141,6 @@ async def run_researcher(
                 finding["configurator_history"] = [
                     {"action": h.action, "reason": h.reason} for h in cfg.history
                 ]
-                # Merge configured facts on top of the static extract — only
-                # for fields the configurator actually populated.
                 fresh = await extract_from_text(cfg.text)
                 if fresh:
                     for k, v in fresh.items():
@@ -213,10 +205,10 @@ async def run_researcher(
             log.exception("could not record researcher error for %s", candidate_id)
 
 
-# ---- Step helpers (Gemini calls) ----------------------------------------
+# ---- Step helpers (DeepSeek calls) ----------------------------------------
 
 
-_EXTRACT_SYSTEM = """You read a single product listing URL and extract a
+_EXTRACT_SYSTEM = """You read a single product listing page text and extract a
 structured summary of what's actually for sale.
 
 Your reply MUST be one raw JSON object — no prose, no Markdown, no code
@@ -228,13 +220,8 @@ attribute fields you can identify — leave a field null when unknown rather
 than guessing."""
 
 
-# The Gemini Developer API rejects ``response_mime_type='application/json'``
-# when any tool is enabled in the same call. So for steps that need both a
-# tool (url_context / google_search) AND structured output, we ask the model
-# to emit JSON inside its text response and parse it ourselves.
-#
-# The instruction is now built dynamically per-request so the ``spec_attrs``
-# section reflects categories from the intake agent's spec.
+# The JSON extraction instruction is built dynamically per-request so the
+# ``spec_attrs`` section reflects categories from the intake agent's spec.
 
 _EXTRACT_JSON_CORE = """Reply with ONLY a JSON object — no prose,
 no code fences — matching exactly this shape:
@@ -308,33 +295,43 @@ def _strip_code_fence(text: str) -> str:
 async def _extract_listing(
     url: str, spec: dict[str, Any]
 ) -> tuple[ListingFacts, dict[str, Any]]:
-    """One Gemini call: url_context tool, JSON-as-text output.
+    """Playwright fetch + DeepSeek extraction, JSON-as-text output.
 
     Returns ``(listing, spec_attrs)`` where ``spec_attrs`` contains the
     dynamic attributes derived from the intake spec's categories.
     """
+    # Fetch page content via Playwright (replaces Gemini url_context).
+    page_text = await playwright_fetch(url)
+    if not page_text or page_text.startswith("[playwright_fetch error]"):
+        log.warning("extract: playwright_fetch failed for %s", url)
+        return ListingFacts(), {}
+
+    # Truncate to avoid blowing the context window.
+    page_text = page_text[:8000]
+
     client = get_client()
     instruction = _build_extract_instruction(spec)
     prompt = (
-        "Read the product listing at this URL and extract the structured facts."
-        f"\nURL: {url}\n\n"
+        f"Here is the rendered text of a product listing page at {url}:\n\n"
+        f"{page_text}\n\n"
         + instruction
     )
     try:
-        resp = await client.aio.models.generate_content(
-            model=settings.gemini_model_researcher,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=_EXTRACT_SYSTEM,
-                tools=[URL_CONTEXT_TOOL],
-                max_output_tokens=1024,
-            ),
+        await rate_limiter.acquire()
+        resp = await client.chat.completions.create(
+            model=settings.deepseek_model_researcher,
+            messages=[
+                {"role": "system", "content": _EXTRACT_SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=1024,
         )
     except Exception as e:
-        log.warning("extract: url_context call failed for %s: %s", url, e)
+        log.warning("extract: DeepSeek call failed for %s: %s", url, e)
         return ListingFacts(), {}
 
-    text = _strip_code_fence(resp.text or "")
+    text = _strip_code_fence(resp.choices[0].message.content or "")
     data = _coerce_listing_json(text)
     if data is None:
         log.warning("extract: could not coerce JSON for %s; text=%r", url, text[:200])
@@ -387,10 +384,11 @@ def _coerce_listing_json(text: str) -> dict[str, Any] | None:
 
 
 _SELLER_SYSTEM = """You assess the trustworthiness of an online seller. The
-user gives you a seller/retailer name. Use google_search to find ONE round
-of evidence: customer reviews, BBB complaints, Trustpilot rating, forum
-mentions of scams. Reply in plain text, 1-2 sentences. If you find nothing
-notable, say so explicitly — don't make up signal."""
+user gives you a seller/retailer name. Based on your knowledge, provide a
+brief assessment: customer reviews reputation, any known scam reports, BBB
+complaints, Trustpilot rating if known. Reply in plain text, 1-2 sentences.
+If you don't have specific information, say so explicitly — don't make up
+signal."""
 
 
 async def _assess_seller(seller: str | None, fallback_retailer: str | None) -> str:
@@ -399,23 +397,23 @@ async def _assess_seller(seller: str | None, fallback_retailer: str | None) -> s
         return "no seller identified"
     client = get_client()
     prompt = f"Assess the trustworthiness of this seller: {name!r}."
-    resp = await client.aio.models.generate_content(
-        model=settings.gemini_model_researcher,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=_SELLER_SYSTEM,
-            tools=[GOOGLE_SEARCH_TOOL],
-            max_output_tokens=512,
-        ),
+    await rate_limiter.acquire()
+    resp = await client.chat.completions.create(
+        model=settings.deepseek_model_researcher,
+        messages=[
+            {"role": "system", "content": _SELLER_SYSTEM},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=512,
     )
-    return (resp.text or "").strip()
+    return (resp.choices[0].message.content or "").strip()
 
 
 _ISSUES_SYSTEM = """You research common known issues for a product. The user
-gives you a product class (e.g. "used iPhone 15 Pro 256GB"). Use google_search
-to gather widely-reported problems, then return a JSON array of up to 4 short
-bullet strings (each <120 chars). Focus on the product itself — do NOT include
-seller-specific complaints."""
+gives you a product class (e.g. "used iPhone 15 Pro 256GB"). Based on your
+knowledge, return a JSON array of up to 4 short bullet strings (each <120
+chars). Focus on the product itself — do NOT include seller-specific
+complaints. Return ONLY a JSON array, no other text."""
 
 
 class IssuesResponse(BaseModel):
@@ -428,22 +426,21 @@ async def _find_known_issues(product_class: str) -> list[str]:
     client = get_client()
     prompt = f"What are commonly reported issues for: {product_class!r}?"
     try:
-        resp = await client.aio.models.generate_content(
-            model=settings.gemini_model_researcher,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=_ISSUES_SYSTEM,
-                tools=[GOOGLE_SEARCH_TOOL],
-                max_output_tokens=512,
-            ),
+        await rate_limiter.acquire()
+        resp = await client.chat.completions.create(
+            model=settings.deepseek_model_researcher,
+            messages=[
+                {"role": "system", "content": _ISSUES_SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=512,
         )
     except Exception as e:
         log.warning("known-issues call failed: %s", e)
         return []
 
-    # We can't combine google_search with response_schema reliably, so parse
-    # the text. Accept either ["a","b"] or {"issues":["a","b"]}.
-    text = (resp.text or "").strip()
+    text = (resp.choices[0].message.content or "").strip()
     if not text:
         return []
     # Strip code fences.
@@ -462,7 +459,7 @@ async def _find_known_issues(product_class: str) -> list[str]:
         pass
     # Fall back: take bullet-shaped lines if JSON parsing failed.
     lines = [
-        ln.lstrip("-*• ").strip()
+        ln.lstrip("-*\u2022 ").strip()
         for ln in text.splitlines()
         if ln.strip() and not ln.strip().startswith("#")
     ]
@@ -478,8 +475,8 @@ async def run_all_researchers(
     spec: dict[str, Any],
 ) -> None:
     """Fan out researchers with a stagger so we don't burst the per-minute
-    Gemini quota. flash-lite is currently 10 RPM, so we cap concurrency to 3
-    and add a ~0.5s offset between starts.
+    DeepSeek quota. We cap concurrency to 3 and add a ~0.5s offset between
+    starts.
     """
     if not candidates:
         return

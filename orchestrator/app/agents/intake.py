@@ -2,7 +2,7 @@
 
 The conversation lives entirely in ``intents.clarifying_turns``:
 - ``[{"role":"user","text":raw_query}]`` is the initial state inserted by the UI.
-- We call Gemini with ``response_mime_type='application/json'`` and a Pydantic
+- We call DeepSeek with ``response_format={"type":"json_object"}`` and a Pydantic
   ``IntakeResponse`` schema — the model is forced to return either ``ask`` or
   ``ready`` in a single structured object.
 - If ``ask``: append ``{"role":"assistant","text":question}``; status stays
@@ -11,7 +11,7 @@ The conversation lives entirely in ``intents.clarifying_turns``:
 - If ``ready``: write the spec onto the intent and flip status to ``ready`` so
   the planner band picks it up on the next poll.
 
-Hard cap: two rounds total. On the second call we instruct Gemini to commit
+Hard cap: two rounds total. On the second call we instruct DeepSeek to commit
 to a spec even with partial info — better a directed search than a stalled UX.
 """
 
@@ -22,11 +22,10 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from google.genai import types
 from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.genai_client import get_client
+from app.genai_client import get_client, rate_limiter
 
 log = logging.getLogger(__name__)
 
@@ -80,7 +79,7 @@ Return a single JSON object exactly matching this structure.
 
 
 # ---------------------------------------------------------------------------
-# Pydantic models — used as Gemini structured-output schema
+# Pydantic models — used for structured-output validation
 # ---------------------------------------------------------------------------
 
 
@@ -119,13 +118,14 @@ def _count_assistant_turns(turns: list[dict[str, Any]]) -> int:
     return sum(1 for t in turns if t.get("role") == "assistant")
 
 
-def _build_contents(turns: list[dict[str, Any]]) -> list[types.Content]:
-    """Convert stored clarifying_turns into Gemini's Content list.
+def _build_messages(
+    turns: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Convert stored clarifying_turns into OpenAI-compatible messages.
 
     Stored turn shape: ``{"role": "user"|"assistant", "text": "..."}``.
-    Gemini uses ``role='model'`` instead of ``'assistant'``.
     """
-    out: list[types.Content] = []
+    out: list[dict[str, str]] = []
     for t in turns:
         role_in = t.get("role")
         text = t.get("text", "")
@@ -134,15 +134,12 @@ def _build_contents(turns: list[dict[str, Any]]) -> list[types.Content]:
         if role_in == "user":
             role = "user"
         elif role_in == "assistant":
-            role = "model"
+            role = "assistant"
         else:
             continue
-        out.append(types.Content(role=role, parts=[types.Part(text=text)]))
+        out.append({"role": role, "content": text})
     if not out:
-        # Defensive: shouldn't happen since UI inserts an initial user turn.
-        out.append(
-            types.Content(role="user", parts=[types.Part(text="(no initial query provided)")])
-        )
+        out.append({"role": "user", "content": "(no initial query provided)"})
     return out
 
 
@@ -174,7 +171,7 @@ async def run_intake(
     rounds_used = _count_assistant_turns(clarifying_turns)
     must_finalize = rounds_used >= MAX_ROUNDS - 1
 
-    contents = _build_contents(clarifying_turns)
+    messages = _build_messages(clarifying_turns)
 
     system = SYSTEM_PROMPT
     if must_finalize:
@@ -186,32 +183,28 @@ async def run_intake(
 
     client = get_client()
     log.info(
-        "intake: rounds_used=%d must_finalize=%s contents_len=%d",
+        "intake: rounds_used=%d must_finalize=%s messages_len=%d",
         rounds_used,
         must_finalize,
-        len(contents),
+        len(messages),
     )
 
-    resp = await client.aio.models.generate_content(
-        model=settings.gemini_model_researcher,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=system,
-            response_mime_type="application/json",
-            response_schema=IntakeResponse,
-            max_output_tokens=1024,
-        ),
+    await rate_limiter.acquire()
+    resp = await client.chat.completions.create(
+        model=settings.deepseek_model_researcher,
+        messages=[{"role": "system", "content": system}, *messages],
+        response_format={"type": "json_object"},
+        max_tokens=1024,
     )
 
-    parsed: IntakeResponse | None = getattr(resp, "parsed", None)
-    if parsed is None:
-        # Fall back to parsing the text payload manually.
-        try:
-            data = json.loads(resp.text or "{}")
-            parsed = IntakeResponse(**data)
-        except Exception as e:
-            log.error("intake: could not parse response: %s; raw=%s", e, resp.text)
-            return IntakeResult(action="ready", spec={"raw_query": raw_query})
+    text = (resp.choices[0].message.content or "").strip()
+    parsed: IntakeResponse | None = None
+    try:
+        data = json.loads(text or "{}")
+        parsed = IntakeResponse(**data)
+    except Exception as e:
+        log.error("intake: could not parse response: %s; raw=%s", e, text)
+        return IntakeResult(action="ready", spec={"raw_query": raw_query})
 
     if parsed.action == "ask" and not must_finalize and parsed.question:
         return IntakeResult(action="ask", question=parsed.question.strip())

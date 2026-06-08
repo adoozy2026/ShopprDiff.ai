@@ -1,15 +1,12 @@
-"""Tool wiring for the agent pipeline (Gemini stack).
+"""Tool wiring for the agent pipeline (DeepSeek stack).
 
-Three tools are exposed:
+Two tools are exposed:
 
-  * **google_search** — Gemini built-in server tool. Google runs the search and
-    returns grounding metadata. No client-side dispatch needed.
-  * **url_context** — Gemini built-in server tool. Reads URLs the model sees
-    in context. Does not fully render JavaScript pages; for those, fall back
-    to ``playwright_fetch``.
-  * **playwright_fetch** — local function declaration. Gemini emits a
-    ``FunctionCall`` block for it; we run a headless chromium and reply with
-    a ``FunctionResponse`` part.
+  * **playwright_fetch** — renders a page with headless Chromium and returns
+    the visible DOM text.  Used for product-page extraction (replaces the
+    former Gemini ``url_context`` server tool) and as a fallback for
+    JavaScript-heavy sites.
+  * **get_browser** — lazy-launch a singleton Chromium instance.
 
 In ``FIXTURE_MODE``, ``playwright_fetch`` short-circuits to canned page
 content from ``fixtures.py`` so we never need a browser or network.
@@ -21,58 +18,10 @@ import asyncio
 import logging
 from typing import Any
 
-from google.genai import types
-
 from app.config import settings
 from app.tools.fixtures import fixture_fetch
 
 log = logging.getLogger(__name__)
-
-
-# ---- Gemini server-tool bundle ------------------------------------------
-
-GOOGLE_SEARCH_TOOL = types.Tool(google_search=types.GoogleSearch())
-URL_CONTEXT_TOOL = types.Tool(url_context=types.UrlContext())
-
-
-def server_tools() -> list[types.Tool]:
-    """Server-side tool list (search + url context)."""
-    return [GOOGLE_SEARCH_TOOL, URL_CONTEXT_TOOL]
-
-
-# ---- Local client tool: playwright_fetch -------------------------------
-
-PLAYWRIGHT_FETCH_DECLARATION = types.FunctionDeclaration(
-    name="playwright_fetch",
-    description=(
-        "Fetch a fully-rendered web page (JavaScript executed) when url_context "
-        "returns thin or empty content. Use ONLY after url_context fails for a "
-        "product page. Returns the visible text of the rendered DOM."
-    ),
-    parameters={
-        "type": "OBJECT",
-        "properties": {
-            "url": {
-                "type": "STRING",
-                "description": "Fully-qualified URL of the product page to render.",
-            },
-            "wait_for_selector": {
-                "type": "STRING",
-                "description": (
-                    "Optional CSS selector to wait for before extracting text. "
-                    "Use when the page has skeletal HTML that hydrates async."
-                ),
-            },
-        },
-        "required": ["url"],
-    },
-)
-
-PLAYWRIGHT_TOOL = types.Tool(function_declarations=[PLAYWRIGHT_FETCH_DECLARATION])
-
-
-def client_tools() -> list[types.Tool]:
-    return [PLAYWRIGHT_TOOL]
 
 
 # ---- Playwright execution ----------------------------------------------
@@ -152,11 +101,7 @@ ToolInput = dict[str, Any]
 
 
 async def dispatch_function_call(name: str, args: ToolInput) -> dict[str, Any]:
-    """Execute a Gemini ``FunctionCall`` and return the response payload.
-
-    Server tools (google_search, url_context) never reach here — Gemini runs
-    them inline and exposes results via grounding metadata.
-    """
+    """Execute a tool call and return the response payload."""
     if name == "playwright_fetch":
         url = args.get("url")
         if not isinstance(url, str):
