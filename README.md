@@ -13,7 +13,7 @@ The system is split into two cooperating services:
 | Layer | Tech | Runs on |
 |---|---|---|
 | **Frontend** | Next.js 16 + Tailwind CSS + `@insforge/sdk` realtime | Vercel (or `localhost:3000`) |
-| **Orchestrator** | FastAPI + Google Gemini (`google-genai`) + Playwright | Your laptop (outbound-only) |
+| **Orchestrator** | FastAPI + NVIDIA Nemotron 3 Ultra via NIM (`openai` SDK) + Playwright | Your laptop (outbound-only) |
 | **Backend** | InsForge (Postgres, Realtime, Auth) | Managed cloud (`insforge.dev`) |
 
 ```
@@ -112,7 +112,7 @@ web/                    Next.js frontend — real-time dashboard
 - Python ≥ 3.12 with [uv](https://docs.astral.sh/uv/)
 - Node.js with [pnpm](https://pnpm.io/)
 - An [InsForge](https://insforge.dev) project (free tier works)
-- A [Google AI Studio](https://aistudio.google.com/app/apikey) API key (Gemini)
+- A [DeepSeek](https://platform.deepseek.com/api_keys) API key
 
 ### 1. Clone & configure
 
@@ -121,7 +121,7 @@ git clone https://github.com/adoozy2026/insforge-hack.git
 cd insforge-hack
 cp .env.example .env
 # Fill in INSFORGE_PROJECT_URL, INSFORGE_ANON_KEY,
-# INSFORGE_SERVICE_ROLE_KEY, and GOOGLE_API_KEY
+# INSFORGE_SERVICE_ROLE_KEY, and DEEPSEEK_API_KEY
 ```
 
 ### 2. Set up the backend
@@ -166,9 +166,9 @@ The orchestrator stays on your machine — no inbound ports required.
 | Frontend | Next.js 16, React 19, Tailwind CSS 4, TypeScript |
 | Backend-as-a-Service | InsForge (Postgres, Realtime, Auth) |
 | Orchestrator | FastAPI, Python 3.12, Pydantic |
-| LLM | Google Gemini (3.5 Flash for research, 2.5 Pro for synthesis) |
-| Web Scraping | Playwright (browser agent), Gemini URL Context (static) |
-| Search | Google Search (via Gemini grounded tool use) |
+| LLM | DeepSeek (deepseek-chat) |
+| Web Scraping | Playwright (browser agent + static page fetch) |
+| Search | Amazon search (via Playwright) |
 | Deployment | Vercel (frontend), local machine (orchestrator) |
 
 ---

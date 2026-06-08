@@ -13,10 +13,10 @@ class Settings(BaseSettings):
     insforge_anon_key: str = ""
     insforge_service_role_key: str = ""
 
-    # --- Google AI Studio (Gemini) ---
-    google_api_key: str = ""
-    gemini_model_researcher: str = "gemini-3.5-flash"
-    gemini_model_synthesizer: str = "gemini-2.5-pro"
+    # --- NVIDIA NIM ---
+    deepseek_api_key: str = ""
+    deepseek_model_researcher: str = "nvidia/nemotron-3-ultra-550b-a55b"
+    deepseek_model_synthesizer: str = "nvidia/nemotron-3-ultra-550b-a55b"
 
     # --- Runtime ---
     fixture_mode: bool = False

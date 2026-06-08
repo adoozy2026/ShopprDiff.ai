@@ -1,20 +1,18 @@
 """Browser-agent configurator.
 
-Static fetch (Gemini's ``url_context``) can't see prices that only appear
-after you configure a product — Apple's "From $1,999" Mac Studio, eBay
-variant dropdowns, Newegg "Add to cart for price". When the static path
-returns a null price OR the URL host is on a known-configurable list, we
-escalate to this module.
+Static fetch can't see prices that only appear after you configure a
+product — Apple's "From $1,999" Mac Studio, eBay variant dropdowns,
+Newegg "Add to cart for price". When the static path returns a null price
+OR the URL host is on a known-configurable list, we escalate to this module.
 
 Per candidate, we open a Playwright page, then run a multi-step loop:
 
   1. Snapshot the visible interactive elements (buttons, links, selects,
      inputs) with their accessible text labels.
-  2. Take a screenshot.
-  3. Ask Gemini for the next action, given the user's spec + the action
-     history + the element snapshot + the screenshot (multimodal).
-  4. Execute the action against the page.
-  5. Update the researcher_findings.step field so the dashboard shows the
+  2. Ask DeepSeek for the next action, given the user's spec + the action
+     history + the element snapshot.
+  3. Execute the action against the page.
+  4. Update the researcher_findings.step field so the dashboard shows the
      work happening live.
 
 We cap at ``MAX_STEPS`` actions so a stuck page can't loop forever, and the
@@ -23,18 +21,16 @@ final pass extracts a fresh ListingFacts from the configured DOM.
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal
 
-from google.genai import types
 from pydantic import BaseModel
 
 from app.config import settings
-from app.genai_client import get_client
-from app.tools.sources import _get_browser, playwright_fetch  # type: ignore
+from app.genai_client import get_client, rate_limiter
+from app.tools.sources import get_browser
 
 log = logging.getLogger(__name__)
 
@@ -130,13 +126,13 @@ async def _snapshot(page) -> list[dict[str, Any]]:
         return []
 
 
-# ---- Gemini decision call ----------------------------------------------
+# ---- DeepSeek decision call ----------------------------------------------
 
 
 _DECIDE_SYSTEM = """You are a browser agent buying a product on behalf of a
-user. You see the page's visible interactive elements and a screenshot. Your
-goal is to configure the listing to match the user's spec so the FINAL price
-is what they'd actually pay, then return action="done".
+user. You see the page's visible interactive elements. Your goal is to
+configure the listing to match the user's spec so the FINAL price is what
+they'd actually pay, then return action="done".
 
 Rules:
   * Pick the element by its index in the provided list.
@@ -247,36 +243,26 @@ async def _decide(
         + _DECIDE_JSON
     )
 
-    contents: list[types.Content] = [
-        types.Content(
-            role="user",
-            parts=[
-                types.Part(text=user_msg_text),
-                types.Part(
-                    inline_data=types.Blob(
-                        mime_type="image/png",
-                        data=screenshot_png,
-                    )
-                ),
-            ],
-        )
-    ]
-
-    gem = get_client()
+    client = get_client()
     try:
-        resp = await gem.aio.models.generate_content(
-            model=settings.gemini_model_researcher,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=_DECIDE_SYSTEM,
-                max_output_tokens=512,
-            ),
+        await rate_limiter.acquire()
+        resp = await client.chat.completions.create(
+            model=settings.deepseek_model_researcher,
+            messages=[
+                {"role": "system", "content": _DECIDE_SYSTEM},
+                {"role": "user", "content": user_msg_text},
+            ],
+            response_format={"type": "json_object"},
+            temperature=1,
+            top_p=0.95,
+            max_tokens=16384,
+            extra_body={"chat_template_kwargs": {"enable_thinking": True}, "reasoning_budget": 16384},
         )
     except Exception as e:
         log.warning("configurator: decide call failed: %s", e)
         return ActionDecision(action="give_up", reason="model call failed")
 
-    data = _coerce_json_object(_strip_code_fence(resp.text or ""))
+    data = _coerce_json_object(_strip_code_fence(resp.choices[0].message.content or ""))
     if not data:
         return ActionDecision(action="give_up", reason="bad JSON from model")
     try:
@@ -333,7 +319,7 @@ async def _execute(page, decision: ActionDecision) -> bool:
         return False
     try:
         if decision.action == "scroll":
-            await page.evaluate(f"window.scrollBy(0, window.innerHeight * 0.7)")
+            await page.evaluate("window.scrollBy(0, window.innerHeight * 0.7)")
             return True
         loc = await _nth_visible_locator(page, "", n or 0)
         if loc is None:
@@ -393,7 +379,7 @@ async def configure_and_extract(
 
     browser = None
     try:
-        browser = await _get_browser()
+        browser = await get_browser()
     except Exception as e:
         log.warning("configurator: browser launch failed: %s", e)
         return ConfigResult(text="", steps=0, history=[])
@@ -502,33 +488,26 @@ async def extract_from_text(text: str) -> dict[str, Any]:
     if not text:
         return {}
     snippet = text[:6000]
-    gem = get_client()
 
-    flash = await _reextract_one(gem, snippet, settings.gemini_model_researcher)
+    flash = await _reextract_one(snippet, settings.deepseek_model_researcher)
     flash_dict = (
-        {k: v for k, v in flash.model_dump(exclude_none=False).items() if v is not None}
+        {k: v for k, v in flash.items() if v is not None}
         if flash
         else {}
     )
 
-    # Flash is fast and cheap; when it finds the price, we're done.
+    # Fast model found the price — we're done.
     if flash_dict.get("price_cents"):
         return flash_dict
 
-    # Flash missed the price. Pro is meaningfully better at locating money
-    # buried in messy DOM text (Apple's "From $X,XXX" right next to a
-    # "Total: $Y,YYY" cluster, eBay variant grids, Newegg bundles). Cost is
-    # at most one extra pro call per missed-price candidate × up to 2
-    # escalations per intent — trivial vs. demo failure rate.
-    pro = await _reextract_one(gem, snippet, settings.gemini_model_synthesizer)
+    # Try again with the synthesizer model for harder cases.
+    pro = await _reextract_one(snippet, settings.deepseek_model_synthesizer)
     pro_dict = (
-        {k: v for k, v in pro.model_dump(exclude_none=False).items() if v is not None}
+        {k: v for k, v in pro.items() if v is not None}
         if pro
         else {}
     )
 
-    # Merge: pro wins for anything it filled, flash fills the rest. Don't
-    # blindly overwrite flash's good fields with pro's nulls.
     merged = dict(flash_dict)
     for k, v in pro_dict.items():
         if v not in (None, ""):
@@ -537,30 +516,34 @@ async def extract_from_text(text: str) -> dict[str, Any]:
 
 
 async def _reextract_one(
-    gem: Any, snippet: str, model: str
-) -> _ConfiguredFacts | None:
-    """One re-extract pass against a Gemini model. Returns None on failure."""
+    snippet: str, model: str
+) -> dict[str, Any] | None:
+    """One re-extract pass against a DeepSeek model. Returns None on failure."""
+    client = get_client()
     try:
-        resp = await gem.aio.models.generate_content(
+        await rate_limiter.acquire()
+        resp = await client.chat.completions.create(
             model=model,
-            contents=snippet + "\n\n" + _REEXTRACT_JSON,
-            config=types.GenerateContentConfig(
-                system_instruction=_REEXTRACT_SYSTEM,
-                response_mime_type="application/json",
-                response_schema=_ConfiguredFacts,
-                max_output_tokens=1024,
-            ),
+            messages=[
+                {"role": "system", "content": _REEXTRACT_SYSTEM},
+                {"role": "user", "content": snippet + "\n\n" + _REEXTRACT_JSON},
+            ],
+            response_format={"type": "json_object"},
+            temperature=1,
+            top_p=0.95,
+            max_tokens=16384,
+            extra_body={"chat_template_kwargs": {"enable_thinking": True}, "reasoning_budget": 16384},
         )
     except Exception as e:
         log.warning("configurator: re-extract (%s) failed: %s", model, e)
         return None
 
-    parsed: _ConfiguredFacts | None = getattr(resp, "parsed", None)
-    if parsed is not None:
-        return parsed
+    text = (resp.choices[0].message.content or "").strip()
     try:
-        data = json.loads(resp.text or "{}")
-        return _ConfiguredFacts(**data)
+        data = json.loads(text or "{}")
+        # Validate against the schema
+        facts = _ConfiguredFacts(**data)
+        return facts.model_dump(exclude_none=False)
     except Exception:
         return None
 
