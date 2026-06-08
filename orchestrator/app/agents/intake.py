@@ -194,8 +194,10 @@ async def run_intake(
         model=settings.deepseek_model_researcher,
         messages=[{"role": "system", "content": system}, *messages],
         response_format={"type": "json_object"},
-        max_tokens=1024,
-        extra_body={"chat_template_kwargs": {"thinking": False}},
+        temperature=1,
+        top_p=0.95,
+        max_tokens=16384,
+        extra_body={"chat_template_kwargs": {"enable_thinking": True}, "reasoning_budget": 16384},
     )
 
     text = (resp.choices[0].message.content or "").strip()

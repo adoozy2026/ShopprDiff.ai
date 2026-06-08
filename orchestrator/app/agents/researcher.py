@@ -325,8 +325,10 @@ async def _extract_listing(
                 {"role": "user", "content": prompt},
             ],
             response_format={"type": "json_object"},
-            max_tokens=1024,
-            extra_body={"chat_template_kwargs": {"thinking": False}},
+            temperature=1,
+            top_p=0.95,
+            max_tokens=16384,
+            extra_body={"chat_template_kwargs": {"enable_thinking": True}, "reasoning_budget": 16384},
         )
     except Exception as e:
         log.warning("extract: DeepSeek call failed for %s: %s", url, e)
@@ -405,8 +407,10 @@ async def _assess_seller(seller: str | None, fallback_retailer: str | None) -> s
             {"role": "system", "content": _SELLER_SYSTEM},
             {"role": "user", "content": prompt},
         ],
-        max_tokens=512,
-        extra_body={"chat_template_kwargs": {"thinking": False}},
+        temperature=1,
+        top_p=0.95,
+        max_tokens=16384,
+        extra_body={"chat_template_kwargs": {"enable_thinking": True}, "reasoning_budget": 16384},
     )
     return (resp.choices[0].message.content or "").strip()
 
@@ -436,8 +440,10 @@ async def _find_known_issues(product_class: str) -> list[str]:
                 {"role": "user", "content": prompt},
             ],
             response_format={"type": "json_object"},
-            max_tokens=512,
-            extra_body={"chat_template_kwargs": {"thinking": False}},
+            temperature=1,
+            top_p=0.95,
+            max_tokens=16384,
+            extra_body={"chat_template_kwargs": {"enable_thinking": True}, "reasoning_budget": 16384},
         )
     except Exception as e:
         log.warning("known-issues call failed: %s", e)

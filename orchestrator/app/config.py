@@ -13,10 +13,10 @@ class Settings(BaseSettings):
     insforge_anon_key: str = ""
     insforge_service_role_key: str = ""
 
-    # --- DeepSeek ---
+    # --- NVIDIA NIM ---
     deepseek_api_key: str = ""
-    deepseek_model_researcher: str = "deepseek-ai/deepseek-v4-pro"
-    deepseek_model_synthesizer: str = "deepseek-ai/deepseek-v4-pro"
+    deepseek_model_researcher: str = "nvidia/nemotron-3-ultra-550b-a55b"
+    deepseek_model_synthesizer: str = "nvidia/nemotron-3-ultra-550b-a55b"
 
     # --- Runtime ---
     fixture_mode: bool = False

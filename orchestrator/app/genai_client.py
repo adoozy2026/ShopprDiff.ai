@@ -1,4 +1,4 @@
-"""DeepSeek client via NVIDIA NIM (OpenAI-compatible) for the orchestrator.
+"""NVIDIA NIM client (OpenAI-compatible) for the orchestrator.
 
 Import ``get_client()`` for the AsyncOpenAI instance and ``rate_limiter``
 for the shared 40 RPM throttle.

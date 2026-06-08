@@ -13,7 +13,7 @@ The system is split into two cooperating services:
 | Layer | Tech | Runs on |
 |---|---|---|
 | **Frontend** | Next.js 16 + Tailwind CSS + `@insforge/sdk` realtime | Vercel (or `localhost:3000`) |
-| **Orchestrator** | FastAPI + DeepSeek V4 Pro via NVIDIA NIM (`openai` SDK) + Playwright | Your laptop (outbound-only) |
+| **Orchestrator** | FastAPI + NVIDIA Nemotron 3 Ultra via NIM (`openai` SDK) + Playwright | Your laptop (outbound-only) |
 | **Backend** | InsForge (Postgres, Realtime, Auth) | Managed cloud (`insforge.dev`) |
 
 ```

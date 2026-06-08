@@ -253,8 +253,10 @@ async def _decide(
                 {"role": "user", "content": user_msg_text},
             ],
             response_format={"type": "json_object"},
-            max_tokens=512,
-            extra_body={"chat_template_kwargs": {"thinking": False}},
+            temperature=1,
+            top_p=0.95,
+            max_tokens=16384,
+            extra_body={"chat_template_kwargs": {"enable_thinking": True}, "reasoning_budget": 16384},
         )
     except Exception as e:
         log.warning("configurator: decide call failed: %s", e)
@@ -527,8 +529,10 @@ async def _reextract_one(
                 {"role": "user", "content": snippet + "\n\n" + _REEXTRACT_JSON},
             ],
             response_format={"type": "json_object"},
-            max_tokens=1024,
-            extra_body={"chat_template_kwargs": {"thinking": False}},
+            temperature=1,
+            top_p=0.95,
+            max_tokens=16384,
+            extra_body={"chat_template_kwargs": {"enable_thinking": True}, "reasoning_budget": 16384},
         )
     except Exception as e:
         log.warning("configurator: re-extract (%s) failed: %s", model, e)

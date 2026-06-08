@@ -246,8 +246,10 @@ async def run_synthesizer(
                 {"role": "user", "content": user_msg},
             ],
             response_format={"type": "json_object"},
-            max_tokens=8192,
-            extra_body={"chat_template_kwargs": {"thinking": False}},
+            temperature=1,
+            top_p=0.95,
+            max_tokens=16384,
+            extra_body={"chat_template_kwargs": {"enable_thinking": True}, "reasoning_budget": 16384},
         )
     except Exception as e:
         log.warning("synthesizer call failed: %s", e)
