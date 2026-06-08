@@ -8,7 +8,33 @@ Score is 0-100. Anything ≥40 displays as a warning; ≥70 as a strong block.
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+_BUDGET_RE = re.compile(r"\$\s*([\d,]+(?:\.\d+)?)")
+
+
+def _extract_budget_cents(spec: dict[str, Any]) -> int | None:
+    """Parse a numeric budget (in cents) from category values or raw_query."""
+    categories = spec.get("categories") or {}
+    for entry in categories.values():
+        if not isinstance(entry, dict):
+            continue
+        value = entry.get("value") or ""
+        m = _BUDGET_RE.search(value)
+        if m:
+            try:
+                return int(float(m.group(1).replace(",", "")) * 100)
+            except ValueError:
+                continue
+    raw = spec.get("raw_query") or ""
+    m = _BUDGET_RE.search(raw)
+    if m:
+        try:
+            return int(float(m.group(1).replace(",", "")) * 100)
+        except ValueError:
+            pass
+    return None
 
 
 def _deal_breaker_text(spec: dict[str, Any]) -> str:
@@ -26,8 +52,7 @@ def score_scam(finding: dict[str, Any], spec: dict[str, Any]) -> tuple[int, list
     reasons: list[str] = []
 
     price_cents = finding.get("price_cents")
-    gc = spec.get("global_constraints") or {}
-    budget_cents = gc.get("budget_cents")
+    budget_cents = _extract_budget_cents(spec)
 
     # 1. Too-good-to-be-true vs the user's stated budget.
     if isinstance(price_cents, int) and isinstance(budget_cents, int) and budget_cents > 0:

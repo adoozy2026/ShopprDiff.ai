@@ -84,7 +84,7 @@ The spec uses a weighted categories system:
 - "must_have" categories are non-negotiable requirements.
 - "deal_breaker" categories disqualify listings that violate them.
 - "preference" categories influence ranking by their importance weight.
-- "global_constraints" contains budget_cents, condition, and shipping_speed.
+- Budget, condition, shipping preferences etc. are all expressed as categories.
 
 You produce a structured recommendation with four kinds of analysis:
 

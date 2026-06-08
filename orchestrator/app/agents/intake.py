@@ -73,11 +73,6 @@ Return a single JSON object exactly matching this structure.
       "type": "must_have|preference|deal_breaker|neutral"
     }
   },
-  "global_constraints": {
-    "budget_cents": integer or null,
-    "condition": "new|renewed|used_like_new|used_good|used_acceptable|any",
-    "shipping_speed": "fast|standard|any"
-  },
   "missing_info": ["list of missing high-impact items"],
   "action": "ask|ready",
   "question": "string if action is ask else null"
@@ -95,18 +90,9 @@ class CategoryEntry(BaseModel):
     type: Literal["must_have", "preference", "deal_breaker", "neutral"]
 
 
-class GlobalConstraints(BaseModel):
-    budget_cents: int | None = None
-    condition: (
-        Literal["new", "renewed", "used_like_new", "used_good", "used_acceptable", "any"] | None
-    ) = None
-    shipping_speed: Literal["fast", "standard", "any"] | None = None
-
-
 class IntakeResponse(BaseModel):
     product_class: str | None = None
     categories: dict[str, CategoryEntry] = {}
-    global_constraints: GlobalConstraints = GlobalConstraints()
     missing_info: list[str] = []
     action: Literal["ask", "ready"]
     question: str | None = None
@@ -166,7 +152,6 @@ def _build_spec(parsed: IntakeResponse, raw_query: str) -> dict[str, Any]:
     return {
         "product_class": parsed.product_class,
         "categories": {name: entry.model_dump() for name, entry in parsed.categories.items()},
-        "global_constraints": parsed.global_constraints.model_dump(exclude_none=False),
         "missing_info": parsed.missing_info,
         "raw_query": raw_query,
     }

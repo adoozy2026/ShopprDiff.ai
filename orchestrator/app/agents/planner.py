@@ -155,6 +155,31 @@ _FOREIGN_SUFFIXES = (
 )
 
 
+_BUDGET_RE = re.compile(r"\$\s*([\d,]+(?:\.\d+)?)")
+
+
+def _extract_budget_str(spec: dict[str, Any]) -> str:
+    """Extract a human-readable budget string (e.g. 'under $700') from categories.
+
+    Scans category values for dollar amounts. Returns empty string if none found.
+    """
+    categories = spec.get("categories") or {}
+    for entry in categories.values():
+        if not isinstance(entry, dict):
+            continue
+        value = (entry.get("value") or "").strip()
+        m = _BUDGET_RE.search(value)
+        if m:
+            return f"under {value}" if "under" not in value.lower() else value
+    # Fallback: check the raw_query too.
+    raw = spec.get("raw_query") or ""
+    m = _BUDGET_RE.search(raw)
+    if m:
+        amount = m.group(0)
+        return f"under {amount}"
+    return ""
+
+
 def _us_only_constraint(spec: dict[str, Any]) -> bool:
     """True if the spec's categories or raw_query hint at a US-only requirement."""
     parts: list[str] = [spec.get("raw_query") or ""]
@@ -250,9 +275,7 @@ async def run_planner(intent_id: str, spec: dict[str, Any]) -> list[CandidateDra
     # query uses the product class + budget + region; the secondary appends
     # high-importance category values as soft preferences.
     product_class = (spec.get("product_class") or spec.get("raw_query") or "").strip()
-    gc = spec.get("global_constraints") or {}
-    budget = gc.get("budget_cents")
-    budget_str = f"under ${budget / 100:.0f}" if isinstance(budget, int) else ""
+    budget_str = _extract_budget_str(spec)
     # Extract high-importance category values for the secondary query.
     categories = spec.get("categories") or {}
     must_have_values = [
