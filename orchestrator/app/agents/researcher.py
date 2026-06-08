@@ -112,22 +112,16 @@ async def run_researcher(
     try:
         await step("fetching listing", "running")
         # Pull OpenGraph meta in parallel with the LLM extract. The meta
-        # scrape is free and works even when Gemini is rate-limited; it's the
-        # truth source for image_url because the model often returns null
-        # there even when the page has a perfectly good og:image.
+        # scrape is free and works even when Gemini is rate-limited.
         (listing, spec_attrs), meta = await asyncio.gather(
             _extract_listing(candidate["source_url"], spec),
             fetch_page_meta(candidate["source_url"]),
             return_exceptions=False,
         )
-        # OG meta enrichment — title fallback + image/description always
-        # from OG since the LLM no longer extracts these universally.
         if not listing.title and meta.title:
             listing.title = meta.title
         listing_payload = listing.model_dump(exclude_none=False)
         listing_payload["spec_attrs"] = spec_attrs
-        if meta.image_url:
-            listing_payload["image_url"] = meta.image_url
         if meta.description:
             listing_payload["description_summary"] = meta.description[:300]
         await step("extracted listing", "running", listing_payload)

@@ -3,7 +3,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   insforge,
-  imgProxy,
   isConfigured,
   type Alternative,
   type CandidatePick,
@@ -281,24 +280,7 @@ function CandidateTile({
         </div>
       </div>
 
-      {f?.image_url ? (
-        // Routed through the orchestrator's /img proxy so retailer hotlink
-        // protection (Referer / hostname checks) doesn't break the load.
-        <div className="mt-3 aspect-video w-full overflow-hidden rounded-md bg-neutral-100">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={imgProxy(f.image_url)}
-            alt={candidate.title}
-            className="h-full w-full object-cover"
-            loading="lazy"
-            onError={(e) => {
-              (e.target as HTMLImageElement).style.display = "none";
-            }}
-          />
-        </div>
-      ) : (
-        <div className="mt-3 aspect-video w-full rounded-md bg-neutral-50" />
-      )}
+
 
       <div className="mt-3 line-clamp-2 text-sm font-medium text-neutral-900">
         {f?.title || candidate.title}
@@ -435,19 +417,7 @@ function TopPickPanel({
   return (
     <section className="mt-6 overflow-hidden rounded-lg border border-emerald-300 bg-emerald-50 p-5 shadow-sm">
       <div className="flex flex-col gap-5 sm:flex-row">
-        {f?.image_url && (
-          <div className="aspect-square w-full max-w-[180px] overflow-hidden rounded-md bg-white">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={imgProxy(f.image_url)}
-              alt={candidate.title}
-              className="h-full w-full object-cover"
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = "none";
-              }}
-            />
-          </div>
-        )}
+
         <div className="flex-1">
           <div className="text-xs font-medium uppercase tracking-wider text-emerald-800">
             Top pick · {candidate.source}

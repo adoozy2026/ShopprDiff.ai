@@ -12,21 +12,6 @@ export function isConfigured(): boolean {
   return Boolean(baseUrl) && Boolean(anonKey);
 }
 
-/**
- * Route an image URL through the orchestrator's pass-through proxy so it
- * loads with a Referer matching its own origin — bypassing the hotlink
- * protection that most retailer CDNs enforce against cross-origin <img>
- * fetches. The orchestrator URL defaults to localhost for the local dev
- * setup; override with NEXT_PUBLIC_ORCHESTRATOR_URL when deploying.
- */
-export function imgProxy(url: string | null | undefined): string | undefined {
-  if (!url) return undefined;
-  const base =
-    process.env.NEXT_PUBLIC_ORCHESTRATOR_URL?.replace(/\/$/, "") ??
-    "http://localhost:8787";
-  return `${base}/img?url=${encodeURIComponent(url)}`;
-}
-
 // --- Domain types: mirror migrations/<ts>_init.sql ---
 export type IntentStatus = "eliciting" | "ready" | "researching" | "done" | "error";
 export type CandidateStatus = "queued" | "researching" | "done" | "rejected" | "error";
@@ -76,7 +61,6 @@ export type FindingPayload = {
   // instead of at the top level.
   spec_attrs?: Record<string, string | number | null>;
   // Enrichment from OG meta / pipeline steps (not LLM-extracted)
-  image_url?: string | null;
   description_summary?: string | null;
   seller_rep?: string | null;
   known_issues?: string[];

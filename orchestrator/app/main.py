@@ -3,11 +3,9 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.db.poll import intent_poller_task
-from app.img_proxy import router as img_router
 
 logging.basicConfig(
     level=settings.orchestrator_log_level.upper(),
@@ -32,16 +30,6 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="shopper-orchestrator", lifespan=lifespan)
-
-# Local dev only — the Next.js dashboard hits /img from a different origin.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_methods=["GET"],
-    allow_headers=["*"],
-)
-
-app.include_router(img_router)
 
 
 @app.get("/healthz")
