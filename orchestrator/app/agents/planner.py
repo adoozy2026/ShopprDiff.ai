@@ -28,6 +28,30 @@ _BROWSER_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 )
 
+_BUDGET_RE = re.compile(r"\$\s*([\d,]+(?:\.\d+)?)")
+
+
+def _extract_budget_str(spec: dict[str, Any]) -> str:
+    """Extract a human-readable budget string (e.g. 'under $700') from categories.
+
+    Scans category values for dollar amounts. Returns empty string if none found.
+    """
+    categories = spec.get("categories") or {}
+    for entry in categories.values():
+        if not isinstance(entry, dict):
+            continue
+        value = (entry.get("value") or "").strip()
+        m = _BUDGET_RE.search(value)
+        if m:
+            return f"under {value}" if "under" not in value.lower() else value
+    # Fallback: check the raw_query too.
+    raw = spec.get("raw_query") or ""
+    m = _BUDGET_RE.search(raw)
+    if m:
+        amount = m.group(0)
+        return f"under {amount}"
+    return ""
+
 
 @dataclass
 class CandidateDraft:
@@ -110,10 +134,19 @@ async def run_planner(intent_id: str, spec: dict[str, Any]) -> list[CandidateDra
     if not isinstance(spec, dict):
         spec = {}
 
+    # Build explicit search queries from the structured spec. The primary
+    # query uses the product class + budget; the secondary appends
+    # high-importance category values as soft preferences.
     product_class = (spec.get("product_class") or spec.get("raw_query") or "").strip()
-    budget = spec.get("budget_cents")
-    budget_str = f"under ${budget / 100:.0f}" if isinstance(budget, int) else ""
-    must_haves = ", ".join(spec.get("must_haves") or [])
+    budget_str = _extract_budget_str(spec)
+    # Extract high-importance category values for the secondary query.
+    categories = spec.get("categories") or {}
+    must_have_values = [
+        e["value"]
+        for e in categories.values()
+        if isinstance(e, dict) and e.get("type") == "must_have"
+    ]
+    must_haves = ", ".join(must_have_values)
 
     queries: list[str] = []
     # Primary: product class + budget

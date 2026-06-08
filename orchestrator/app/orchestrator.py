@@ -18,9 +18,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from urllib.parse import urlparse
-
-from app.agents.extractor_generator import maybe_trigger as maybe_trigger_extractors
 from app.agents.intake import run_intake
 from app.agents.planner import run_planner
 from app.agents.researcher import run_all_researchers
@@ -28,14 +25,6 @@ from app.agents.synthesizer import run_synthesizer
 from app.db.client import InsforgeClient
 
 log = logging.getLogger(__name__)
-
-
-def _registrable(url: str) -> str:
-    try:
-        host = (urlparse(url).hostname or "").lower()
-    except Exception:
-        return ""
-    return host[4:] if host.startswith("www.") else host
 
 
 async def _set_error(client: InsforgeClient, intent_id: str, msg: str) -> None:
@@ -179,21 +168,6 @@ async def _stage_researching(client: InsforgeClient, intent_id: str) -> None:
 
     await run_all_researchers(client, candidates, spec)
     log.info("researching complete for intent %s (%d candidates)", intent_id, len(candidates))
-
-    # Once researchers are done, scan candidates whose configurator actually
-    # ran for new extractor-pool candidates. This is fire-and-forget — the
-    # Replicas spawn is feature-flagged and non-fatal.
-    try:
-        domains = {
-            _registrable(c["source_url"])
-            for c in candidates
-            if c.get("source_url")
-        }
-        domains.discard("")
-        if domains:
-            await maybe_trigger_extractors(client, domains)
-    except Exception as e:
-        log.warning("extractor pool trigger failed: %s", e)
 
     # Synthesize a recommendation from the completed findings before flipping
     # the intent to 'done' so the dashboard receives the rec in the same flow.
