@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from google.genai import types
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.genai_client import get_client
@@ -32,43 +32,75 @@ log = logging.getLogger(__name__)
 
 MAX_ROUNDS = 2  # at most one "ask" before we force a ready
 
-SYSTEM_PROMPT = """You are an intake agent for a personal shopping service.
+SYSTEM_PROMPT = """\
+You are an intake agent for a personal shopping service.
 
-Your job is to extract a structured shopping spec from the user's request. The
-spec is what downstream agents will use to search and evaluate products.
+Task
+Extract the user's priorities from their request and produce a structured, \
+weighted shopping spec for downstream ranking and filtering. Do not assume a \
+fixed list of categories. Infer categories from the user's language and create \
+weights that reflect relative importance.
 
-You may ask AT MOST one clarifying question to fill in the most important
-missing field. If you have enough information OR you have already asked one
-question, return action="ready" with the spec.
+Behavior rules
+1. Identify the product or product class as a short noun phrase and place it \
+in **product_class**.
+2. Extract explicit requirements and implicit priorities. Turn each into a \
+**category** named using the user's words when possible.
+3. For each category produce:
+   - **value**: the user's stated preference or constraint as text.
+   - **importance**: a numeric weight from 0.0 to 1.0 representing how \
+important this category is relative to others.
+   - **type**: one of "must_have", "preference", "deal_breaker", "neutral".
+4. Convert qualitative cues into weights using the conversion rules below. \
+If the user uses absolute language such as "must", "required", "cannot", set \
+**type** to "must_have" or "deal_breaker" and importance to 1.0.
+5. If the user gives tradeoffs, reflect them by assigning relative weights \
+across affected categories.
+6. Ask AT MOST one clarifying question only if a missing item would prevent \
+reasonable ranking. If you ask a question, return action="ask" and include the \
+question. If you already asked one or have enough info, return action="ready".
+7. Be concise. Use null for unknowns.
 
-A good spec includes (use null for unknowns):
-- product_class: short noun phrase (e.g. "used iPhone 15 Pro", "noise-cancelling headphones")
-- budget_cents: maximum acceptable price, in US cents
-- condition: one of "new" | "renewed" | "used_like_new" | "used_good" | "used_acceptable" | "any"
-- must_haves: list of feature/spec strings the user explicitly required
-- deal_breakers: list of constraints that disqualify a listing
-- retailer_preferences: list of retailer names or [] if no preference
-- shipping_speed: "fast" | "standard" | "any"
-- notes: any other context worth remembering
+Output JSON schema
+Return a single JSON object exactly matching this structure.
 
-Be concise. Never ask multiple questions at once."""
+{
+  "product_class": "string or null",
+  "categories": {
+    "<category_name>": {
+      "value": "string",
+      "importance": 0.0-1.0,
+      "type": "must_have|preference|deal_breaker|neutral"
+    }
+  },
+  "missing_info": ["list of missing high-impact items"],
+  "action": "ask|ready",
+  "question": "string if action is ask else null"
+}"""
 
 
-class IntakeSpec(BaseModel):
-    product_class: str | None = None
-    budget_cents: int | None = None
-    condition: str | None = None
-    must_haves: list[str] = []
-    deal_breakers: list[str] = []
-    retailer_preferences: list[str] = []
-    shipping_speed: str | None = None
-    notes: str | None = None
+# ---------------------------------------------------------------------------
+# Pydantic models — used as Gemini structured-output schema
+# ---------------------------------------------------------------------------
+
+
+class CategoryEntry(BaseModel):
+    value: str
+    importance: float = Field(ge=0.0, le=1.0)
+    type: Literal["must_have", "preference", "deal_breaker", "neutral"]
 
 
 class IntakeResponse(BaseModel):
+    product_class: str | None = None
+    categories: dict[str, CategoryEntry] = {}
+    missing_info: list[str] = []
     action: Literal["ask", "ready"]
     question: str | None = None
-    spec: IntakeSpec | None = None
+
+
+# ---------------------------------------------------------------------------
+# Result dataclass returned to the dispatcher
+# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -76,6 +108,11 @@ class IntakeResult:
     action: Literal["ask", "ready"]
     question: str | None = None
     spec: dict[str, Any] | None = None
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def _count_assistant_turns(turns: list[dict[str, Any]]) -> int:
@@ -103,8 +140,26 @@ def _build_contents(turns: list[dict[str, Any]]) -> list[types.Content]:
         out.append(types.Content(role=role, parts=[types.Part(text=text)]))
     if not out:
         # Defensive: shouldn't happen since UI inserts an initial user turn.
-        out.append(types.Content(role="user", parts=[types.Part(text="(no initial query provided)")]))
+        out.append(
+            types.Content(role="user", parts=[types.Part(text="(no initial query provided)")])
+        )
     return out
+
+
+def _build_spec(parsed: IntakeResponse, raw_query: str) -> dict[str, Any]:
+    """Convert the structured IntakeResponse into the spec dict persisted on
+    the intent row and consumed by downstream agents."""
+    return {
+        "product_class": parsed.product_class,
+        "categories": {name: entry.model_dump() for name, entry in parsed.categories.items()},
+        "missing_info": parsed.missing_info,
+        "raw_query": raw_query,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
 
 
 async def run_intake(
@@ -161,7 +216,6 @@ async def run_intake(
     if parsed.action == "ask" and not must_finalize and parsed.question:
         return IntakeResult(action="ask", question=parsed.question.strip())
 
-    spec = (parsed.spec.model_dump(exclude_none=False) if parsed.spec else {})
-    spec.setdefault("raw_query", raw_query)
+    spec = _build_spec(parsed, raw_query)
     log.debug("intake: ready spec=%s", json.dumps(spec)[:400])
     return IntakeResult(action="ready", spec=spec)

@@ -59,23 +59,51 @@ _NON_PRODUCT_DOMAINS = {
 
 SYSTEM_PROMPT = """You are a search planner for a personal shopping service.
 
-You will be given a structured shopping spec. Your job is to find product
-listings the user could actually buy. Use the google_search tool to run 3-4
-queries: one broad ("<product class> <key constraints>"), plus 2-3 narrower
-retailer-scoped queries — INCLUDING `site:amazon.com <product>` as one of
-them. Other useful retailers: `site:ebay.com`, `site:bestbuy.com`,
-`site:walmart.com`, `site:target.com`, `site:swappa.com`, `site:newegg.com`,
-plus any in the spec's retailer_preferences. Prefer retailer product pages
-over reviews, articles, or social media.
+You will be given a structured shopping spec with weighted categories. Your
+job is to find product listings the user could actually buy. Use the
+google_search tool to run 3-4 queries: one broad ("<product class> <key
+constraints>"), plus 2-3 narrower retailer-scoped queries — INCLUDING
+`site:amazon.com <product>` as one of them. Other useful retailers:
+`site:ebay.com`, `site:bestbuy.com`, `site:walmart.com`, `site:target.com`,
+`site:swappa.com`, `site:newegg.com`. Prefer retailer product pages over
+reviews, articles, or social media.
 
 CRITICAL: ALWAYS include an `site:amazon.com` query among your search calls.
 Google's grounded results underweight Amazon in shopping contexts; without an
 explicit site-scoped query, Amazon listings vanish from results, which hurts
 price comparison.
 
+Pay attention to the importance weights: categories with importance >= 0.8
+should strongly influence your search queries, while lower-weight preferences
+can be used to differentiate in secondary queries.
+
 You do not need to write any prose response. Just run the searches; we read
 the grounding metadata directly. Be efficient with searches."""
 
+
+_BUDGET_RE = re.compile(r"\$\s*([\d,]+(?:\.\d+)?)")
+
+
+def _extract_budget_str(spec: dict[str, Any]) -> str:
+    """Extract a human-readable budget string (e.g. 'under $700') from categories.
+
+    Scans category values for dollar amounts. Returns empty string if none found.
+    """
+    categories = spec.get("categories") or {}
+    for entry in categories.values():
+        if not isinstance(entry, dict):
+            continue
+        value = (entry.get("value") or "").strip()
+        m = _BUDGET_RE.search(value)
+        if m:
+            return f"under {value}" if "under" not in value.lower() else value
+    # Fallback: check the raw_query too.
+    raw = spec.get("raw_query") or ""
+    m = _BUDGET_RE.search(raw)
+    if m:
+        amount = m.group(0)
+        return f"under {amount}"
+    return ""
 
 
 @dataclass
@@ -140,16 +168,19 @@ async def run_planner(intent_id: str, spec: dict[str, Any]) -> list[CandidateDra
     if not isinstance(spec, dict):
         spec = {}
 
-    # Conflict-heavy specs (multiple condition tags from the chip UI) confuse
-    # the model — it often returns without calling google_search at all when
-    # the intent is "find me a Mac Studio that is brand-new AND open-box AND
-    # gently-used AND certified-refurb". Build an explicit primary query that
-    # collapses to the unambiguous parts (product class + budget + region),
-    # and a secondary query that uses the rest as soft preferences.
+    # Build explicit search queries from the structured spec. The primary
+    # query uses the product class + budget; the secondary appends
+    # high-importance category values as soft preferences.
     product_class = (spec.get("product_class") or spec.get("raw_query") or "").strip()
-    budget = spec.get("budget_cents")
-    budget_str = f"under ${budget / 100:.0f}" if isinstance(budget, int) else ""
-    must_haves = ", ".join(spec.get("must_haves") or [])
+    budget_str = _extract_budget_str(spec)
+    # Extract high-importance category values for the secondary query.
+    categories = spec.get("categories") or {}
+    must_have_values = [
+        e["value"]
+        for e in categories.values()
+        if isinstance(e, dict) and e.get("type") == "must_have"
+    ]
+    must_haves = ", ".join(must_have_values)
 
     primary = f"{product_class} {budget_str}".strip()
     secondary = f"{product_class} {must_haves}".strip() if must_haves else primary
@@ -168,9 +199,7 @@ async def run_planner(intent_id: str, spec: dict[str, Any]) -> list[CandidateDra
     )
 
     client = get_client()
-    log.info(
-        "planner: intent_id=%s primary=%r secondary=%r", intent_id, primary, secondary
-    )
+    log.info("planner: intent_id=%s primary=%r secondary=%r", intent_id, primary, secondary)
     resp = await client.aio.models.generate_content(
         model=settings.gemini_model_researcher,
         contents=user_msg,
@@ -185,8 +214,8 @@ async def run_planner(intent_id: str, spec: dict[str, Any]) -> list[CandidateDra
     log.info("planner: %d grounding URLs returned", len(raw))
     if not raw:
         log.warning(
-            "planner: empty grounding metadata — google_search likely never invoked "
-            "for intent %s", intent_id
+            "planner: empty grounding metadata — google_search likely never invoked for intent %s",
+            intent_id,
         )
 
     # Resolve grounding redirects in parallel so candidate.source_url is the
