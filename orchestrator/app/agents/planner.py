@@ -73,86 +73,12 @@ Google's grounded results underweight Amazon in shopping contexts; without an
 explicit site-scoped query, Amazon listings vanish from results, which hurts
 price comparison.
 
-ALSO CRITICAL: Honor categories with type "deal_breaker" strictly. If a
-deal-breaker mentions "US-based seller" or "ships from the US", restrict
-your queries to US retailers — append `site:.com OR site:.us` or
-`"ships from United States"` to broaden away from foreign listings. Never
-return links from .com.my, .com.au, .co.uk, .de, .fr, .es, .it, .nl, .ca
-etc. when a US-only constraint applies. The dashboard will hard-filter these
-afterward; you help by not surfacing them in the first place.
-
 Pay attention to the importance weights: categories with importance >= 0.8
 should strongly influence your search queries, while lower-weight preferences
 can be used to differentiate in secondary queries.
 
 You do not need to write any prose response. Just run the searches; we read
 the grounding metadata directly. Be efficient with searches."""
-
-
-# Country TLDs we drop when a US-only constraint is detected in the spec.
-_FOREIGN_TLDS = (
-    ".my",
-    ".au",
-    ".uk",
-    ".de",
-    ".fr",
-    ".es",
-    ".it",
-    ".nl",
-    ".ca",
-    ".jp",
-    ".kr",
-    ".cn",
-    ".hk",
-    ".sg",
-    ".id",
-    ".th",
-    ".vn",
-    ".ph",
-    ".br",
-    ".mx",
-    ".ar",
-    ".ie",
-    ".pl",
-    ".se",
-    ".no",
-    ".fi",
-    ".dk",
-    ".be",
-    ".at",
-    ".ch",
-    ".cz",
-    ".tr",
-    ".gr",
-    ".pt",
-    ".ru",
-    ".za",
-    ".nz",
-    ".ae",
-    ".sa",
-    ".il",
-    ".eg",
-)
-
-# Multi-segment country suffixes that .endswith() catches as a whole.
-_FOREIGN_SUFFIXES = (
-    ".com.my",
-    ".com.au",
-    ".co.uk",
-    ".com.sg",
-    ".com.hk",
-    ".com.ph",
-    ".com.br",
-    ".com.mx",
-    ".co.id",
-    ".co.in",
-    ".co.jp",
-    ".co.kr",
-    ".co.nz",
-    ".co.za",
-    ".com.tw",
-    ".com.tr",
-)
 
 
 _BUDGET_RE = re.compile(r"\$\s*([\d,]+(?:\.\d+)?)")
@@ -178,35 +104,6 @@ def _extract_budget_str(spec: dict[str, Any]) -> str:
         amount = m.group(0)
         return f"under {amount}"
     return ""
-
-
-def _us_only_constraint(spec: dict[str, Any]) -> bool:
-    """True if the spec's categories or raw_query hint at a US-only requirement."""
-    parts: list[str] = [spec.get("raw_query") or ""]
-    for entry in (spec.get("categories") or {}).values():
-        if isinstance(entry, dict):
-            parts.append(entry.get("value") or "")
-    haystack = " ".join(parts).lower()
-    if not haystack:
-        return False
-    return any(
-        tok in haystack
-        for tok in ("us-based", "us based", "united states", "ships from us", "u.s.")
-    )
-
-
-def _passes_region_filter(url: str, us_only: bool) -> bool:
-    if not us_only:
-        return True
-    host = (urlparse(url).hostname or "").lower()
-    if not host:
-        return True
-    if any(host.endswith(s) for s in _FOREIGN_SUFFIXES):
-        return False
-    last_dot = host.rfind(".")
-    if last_dot != -1 and host[last_dot:] in _FOREIGN_TLDS:
-        return False
-    return True
 
 
 @dataclass
@@ -272,7 +169,7 @@ async def run_planner(intent_id: str, spec: dict[str, Any]) -> list[CandidateDra
         spec = {}
 
     # Build explicit search queries from the structured spec. The primary
-    # query uses the product class + budget + region; the secondary appends
+    # query uses the product class + budget; the secondary appends
     # high-importance category values as soft preferences.
     product_class = (spec.get("product_class") or spec.get("raw_query") or "").strip()
     budget_str = _extract_budget_str(spec)
@@ -284,9 +181,8 @@ async def run_planner(intent_id: str, spec: dict[str, Any]) -> list[CandidateDra
         if isinstance(e, dict) and e.get("type") == "must_have"
     ]
     must_haves = ", ".join(must_have_values)
-    us_only_hint = " in United States" if _us_only_constraint(spec) else ""
 
-    primary = f"{product_class} {budget_str}{us_only_hint}".strip()
+    primary = f"{product_class} {budget_str}".strip()
     secondary = f"{product_class} {must_haves}".strip() if must_haves else primary
     amazon = f"site:amazon.com {product_class} {budget_str}".strip()
 
@@ -326,18 +222,13 @@ async def run_planner(intent_id: str, spec: dict[str, Any]) -> list[CandidateDra
     # real retailer URL (not a one-time-use vertexai redirect).
     resolved = await _resolve_grounding_redirects(raw)
 
-    us_only = _us_only_constraint(spec)
     seen: set[str] = set()
     drafts: list[CandidateDraft] = []
-    rejected_foreign = 0
     for url, title in resolved:
         if url in seen:
             continue
         seen.add(url)
         if not _is_product_url(url):
-            continue
-        if not _passes_region_filter(url, us_only):
-            rejected_foreign += 1
             continue
         drafts.append(
             CandidateDraft(
@@ -349,12 +240,7 @@ async def run_planner(intent_id: str, spec: dict[str, Any]) -> list[CandidateDra
         if len(drafts) >= MAX_CANDIDATES:
             break
 
-    log.info(
-        "planner: %d candidates after filtering (us_only=%s, rejected_foreign=%d)",
-        len(drafts),
-        us_only,
-        rejected_foreign,
-    )
+    log.info("planner: %d candidates after filtering", len(drafts))
     return drafts
 
 
