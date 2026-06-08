@@ -83,6 +83,11 @@ async def _search_amazon(query: str) -> list[tuple[str, str]]:
     Uses Playwright to load the search-results page, then extracts product
     links and titles from the DOM. Returns up to ~20 results before the
     caller dedupes / caps.
+
+    Amazon rejects direct cold navigation to ``/s?k=…`` from headless
+    browsers (returns a "Sorry" error page). Visiting the homepage first
+    establishes session cookies that make subsequent search requests
+    succeed.
     """
     encoded = quote_plus(query)
     url = f"https://www.amazon.com/s?k={encoded}"
@@ -93,6 +98,10 @@ async def _search_amazon(query: str) -> list[tuple[str, str]]:
     page = await ctx.new_page()
     results: list[tuple[str, str]] = []
     try:
+        # Warm up session: visit the homepage so Amazon sets cookies.
+        await page.goto(
+            "https://www.amazon.com", wait_until="domcontentloaded", timeout=20_000
+        )
         await page.goto(url, wait_until="domcontentloaded", timeout=25_000)
         # Wait for the main results grid to appear.
         try:
