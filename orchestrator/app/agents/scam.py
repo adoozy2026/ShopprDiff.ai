@@ -11,12 +11,23 @@ from __future__ import annotations
 from typing import Any
 
 
+def _deal_breaker_text(spec: dict[str, Any]) -> str:
+    """Aggregate all deal_breaker category values into a single lowercase string."""
+    categories = spec.get("categories") or {}
+    parts: list[str] = []
+    for entry in categories.values():
+        if isinstance(entry, dict) and entry.get("type") == "deal_breaker":
+            parts.append(entry.get("value") or "")
+    return " ".join(parts).lower()
+
+
 def score_scam(finding: dict[str, Any], spec: dict[str, Any]) -> tuple[int, list[str]]:
     score = 0
     reasons: list[str] = []
 
     price_cents = finding.get("price_cents")
-    budget_cents = spec.get("budget_cents")
+    gc = spec.get("global_constraints") or {}
+    budget_cents = gc.get("budget_cents")
 
     # 1. Too-good-to-be-true vs the user's stated budget.
     if isinstance(price_cents, int) and isinstance(budget_cents, int) and budget_cents > 0:
@@ -24,8 +35,8 @@ def score_scam(finding: dict[str, Any], spec: dict[str, Any]) -> tuple[int, list
         if ratio < 0.45:
             score += 35
             reasons.append(
-                f"price (${price_cents/100:.0f}) is <45% of your budget "
-                f"(${budget_cents/100:.0f}) — verify variant + condition"
+                f"price (${price_cents / 100:.0f}) is <45% of your budget "
+                f"(${budget_cents / 100:.0f}) — verify variant + condition"
             )
 
     # 2. No return policy is a meaningful risk signal for used goods.
@@ -36,7 +47,7 @@ def score_scam(finding: dict[str, Any], spec: dict[str, Any]) -> tuple[int, list
 
     # 3. Ships-from country mismatch — a US-only spec hitting an overseas shipper.
     ships_from = (finding.get("ships_from") or "").lower()
-    deal_breakers = " ".join(spec.get("deal_breakers") or []).lower()
+    deal_breakers = _deal_breaker_text(spec)
     if ships_from and ("us" in deal_breakers or "united states" in deal_breakers):
         if not any(
             tok in ships_from for tok in ("united states", "usa", " us", "u.s.")

@@ -160,40 +160,16 @@ def _build_contents(turns: list[dict[str, Any]]) -> list[types.Content]:
     return out
 
 
-def _derive_compat_spec(parsed: IntakeResponse, raw_query: str) -> dict[str, Any]:
-    """Build a spec dict that includes both the new weighted categories and
-    backward-compatible flat fields expected by downstream agents (planner,
-    synthesizer, etc.).
-    """
-    spec: dict[str, Any] = {}
-
-    # New structured fields
-    spec["product_class"] = parsed.product_class
-    spec["categories"] = {name: entry.model_dump() for name, entry in parsed.categories.items()}
-    spec["global_constraints"] = parsed.global_constraints.model_dump(exclude_none=False)
-    spec["missing_info"] = parsed.missing_info
-
-    # Backward-compatible flat fields derived from categories
-    gc = parsed.global_constraints
-    spec["budget_cents"] = gc.budget_cents
-    spec["condition"] = gc.condition
-    spec["shipping_speed"] = gc.shipping_speed
-
-    must_haves: list[str] = []
-    deal_breakers: list[str] = []
-    for name, entry in parsed.categories.items():
-        if entry.type == "must_have":
-            must_haves.append(entry.value)
-        elif entry.type == "deal_breaker":
-            deal_breakers.append(entry.value)
-
-    spec["must_haves"] = must_haves
-    spec["deal_breakers"] = deal_breakers
-    spec["retailer_preferences"] = []
-    spec["notes"] = None
-    spec["raw_query"] = raw_query
-
-    return spec
+def _build_spec(parsed: IntakeResponse, raw_query: str) -> dict[str, Any]:
+    """Convert the structured IntakeResponse into the spec dict persisted on
+    the intent row and consumed by downstream agents."""
+    return {
+        "product_class": parsed.product_class,
+        "categories": {name: entry.model_dump() for name, entry in parsed.categories.items()},
+        "global_constraints": parsed.global_constraints.model_dump(exclude_none=False),
+        "missing_info": parsed.missing_info,
+        "raw_query": raw_query,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +231,6 @@ async def run_intake(
     if parsed.action == "ask" and not must_finalize and parsed.question:
         return IntakeResult(action="ask", question=parsed.question.strip())
 
-    spec = _derive_compat_spec(parsed, raw_query)
+    spec = _build_spec(parsed, raw_query)
     log.debug("intake: ready spec=%s", json.dumps(spec)[:400])
     return IntakeResult(action="ready", spec=spec)
