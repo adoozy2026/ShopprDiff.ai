@@ -1,4 +1,4 @@
-"""Single DeepSeek (OpenAI-compatible) client for the orchestrator.
+"""DeepSeek client via NVIDIA NIM (OpenAI-compatible) for the orchestrator.
 
 Import ``get_client()`` for the AsyncOpenAI instance and ``rate_limiter``
 for the shared 40 RPM throttle.
@@ -16,7 +16,7 @@ from app.config import settings
 
 
 # ---------------------------------------------------------------------------
-# Rate limiter — 40 requests per minute (user-specified DeepSeek limit).
+# Rate limiter — 40 requests per minute (user-specified NVIDIA limit).
 # ---------------------------------------------------------------------------
 
 
@@ -57,5 +57,5 @@ def get_client() -> AsyncOpenAI:
         raise RuntimeError("DEEPSEEK_API_KEY not set")
     return AsyncOpenAI(
         api_key=settings.deepseek_api_key,
-        base_url="https://api.deepseek.com",
+        base_url="https://integrate.api.nvidia.com/v1",
     )

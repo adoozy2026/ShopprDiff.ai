@@ -247,6 +247,7 @@ async def run_synthesizer(
             ],
             response_format={"type": "json_object"},
             max_tokens=8192,
+            extra_body={"chat_template_kwargs": {"thinking": False}},
         )
     except Exception as e:
         log.warning("synthesizer call failed: %s", e)

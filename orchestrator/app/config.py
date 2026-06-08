@@ -15,8 +15,8 @@ class Settings(BaseSettings):
 
     # --- DeepSeek ---
     deepseek_api_key: str = ""
-    deepseek_model_researcher: str = "deepseek-chat"
-    deepseek_model_synthesizer: str = "deepseek-chat"
+    deepseek_model_researcher: str = "deepseek-ai/deepseek-v4-pro"
+    deepseek_model_synthesizer: str = "deepseek-ai/deepseek-v4-pro"
 
     # --- Runtime ---
     fixture_mode: bool = False

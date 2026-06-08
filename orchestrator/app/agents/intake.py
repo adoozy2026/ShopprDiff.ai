@@ -195,6 +195,7 @@ async def run_intake(
         messages=[{"role": "system", "content": system}, *messages],
         response_format={"type": "json_object"},
         max_tokens=1024,
+        extra_body={"chat_template_kwargs": {"thinking": False}},
     )
 
     text = (resp.choices[0].message.content or "").strip()

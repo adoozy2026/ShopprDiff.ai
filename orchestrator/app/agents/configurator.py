@@ -254,6 +254,7 @@ async def _decide(
             ],
             response_format={"type": "json_object"},
             max_tokens=512,
+            extra_body={"chat_template_kwargs": {"thinking": False}},
         )
     except Exception as e:
         log.warning("configurator: decide call failed: %s", e)
@@ -527,6 +528,7 @@ async def _reextract_one(
             ],
             response_format={"type": "json_object"},
             max_tokens=1024,
+            extra_body={"chat_template_kwargs": {"thinking": False}},
         )
     except Exception as e:
         log.warning("configurator: re-extract (%s) failed: %s", model, e)
