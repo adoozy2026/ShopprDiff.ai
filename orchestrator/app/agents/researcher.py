@@ -55,27 +55,7 @@ log = logging.getLogger(__name__)
 class ListingFacts(BaseModel):
     title: str | None = None
     price_cents: int | None = None
-    condition: str | None = None
-    seller: str | None = None
     shipping_cost_cents: int | None = None
-    shipping_speed: str | None = None
-    ships_from: str | None = None
-    return_policy: str | None = None
-    image_url: str | None = None
-    description_summary: str | None = None
-
-
-def _looks_like_url(s: str) -> bool:
-    """Cheap sanity check: a single well-formed URL with no embedded second
-    scheme. Catches the common LLM failure mode of concatenating two URLs."""
-    if not s or not isinstance(s, str):
-        return False
-    s = s.strip()
-    if not s.startswith(("http://", "https://")):
-        return False
-    # Reject anything with a second scheme inside (e.g. ".../foohttps://...").
-    rest = s[8:] if s.startswith("https://") else s[7:]
-    return "https://" not in rest and "http://" not in rest
 
 
 # ---- Public entry point -------------------------------------------------
@@ -140,22 +120,16 @@ async def run_researcher(
             fetch_page_meta(candidate["source_url"]),
             return_exceptions=False,
         )
-        # Merge rules per field:
-        #   * image_url — OG wins outright. The LLM frequently emits
-        #     concatenated garbage like "<source_url><og:image>" so its value
-        #     is untrustworthy. og:image is what the retailer publishes.
-        #   * title / description — LLM wins when present (more on-spec),
-        #     OG fills gaps.
-        if meta.image_url:
-            listing.image_url = meta.image_url
-        elif listing.image_url and not _looks_like_url(listing.image_url):
-            listing.image_url = None
+        # OG meta enrichment — title fallback + image/description always
+        # from OG since the LLM no longer extracts these universally.
         if not listing.title and meta.title:
             listing.title = meta.title
-        if not listing.description_summary and meta.description:
-            listing.description_summary = meta.description[:300]
         listing_payload = listing.model_dump(exclude_none=False)
         listing_payload["spec_attrs"] = spec_attrs
+        if meta.image_url:
+            listing_payload["image_url"] = meta.image_url
+        if meta.description:
+            listing_payload["description_summary"] = meta.description[:300]
         await step("extracted listing", "running", listing_payload)
 
         # ---- Optional browser-agent escalation ----
@@ -197,7 +171,8 @@ async def run_researcher(
             )
 
         await step("checking seller reputation", "running")
-        seller_rep = await _assess_seller(listing.seller, candidate.get("source"))
+        seller_name = (spec_attrs.get("seller") or finding.get("seller"))
+        seller_rep = await _assess_seller(seller_name, candidate.get("source"))
         await step("evaluating seller", "running", {"seller_rep": seller_rep})
 
         await step("scanning known issues", "running")
@@ -254,7 +229,7 @@ Your reply MUST be one raw JSON object — no prose, no Markdown, no code
 fences, no array wrapper. Be conservative: leave fields null if the page
 doesn't clearly state them. Do NOT invent prices, conditions, or sellers.
 price_cents and shipping_cost_cents must be integers in US cents. If the
-page shows a price range, use the lowest. For spec_attrs, fill the
+page shows a price range, use the lowest. For spec_attrs, fill only the
 attribute fields you can identify — leave a field null when unknown rather
 than guessing."""
 
@@ -273,32 +248,17 @@ no code fences — matching exactly this shape:
 {
   "title": string|null,
   "price_cents": integer|null,
-  "condition": string|null,
-  "seller": string|null,
-  "shipping_cost_cents": integer|null,
-  "shipping_speed": string|null,
-  "ships_from": string|null,
-  "return_policy": string|null,
-  "image_url": string|null,
-  "description_summary": string|null"""
+  "shipping_cost_cents": integer|null"""
 
 _EXTRACT_JSON_FOOTER = """Use null for fields the page does not state. price_cents and
-shipping_cost_cents are integers in US cents.
-
-image_url: the primary product image — prefer the OpenGraph `og:image`
-meta tag if present, otherwise the largest visible product photo URL.
-
-description_summary: 1-2 neutral sentences (≤200 chars) describing what's
-actually being sold — variant, what's included, notable seller-supplied
-detail. Do NOT include marketing language."""
+shipping_cost_cents are integers in US cents."""
 
 
 def _build_extract_instruction(spec: dict[str, Any]) -> str:
     """Build the JSON extraction instruction dynamically from the intake spec.
 
-    Core listing fields (price, seller, shipping, etc.) are always requested.
-    Additional ``spec_attrs`` fields are derived from the spec's categories so
-    the extraction adapts to whatever the user is shopping for.
+    Only title, price_cents, and shipping_cost_cents are universal. Every other
+    attribute the researcher extracts is derived from the spec's categories.
     """
     categories = spec.get("categories") or {}
 

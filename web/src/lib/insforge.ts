@@ -67,18 +67,17 @@ export type FindingRow = {
 };
 
 export type FindingPayload = {
+  // Universal core fields (always extracted)
   title?: string | null;
   price_cents?: number | null;
-  condition?: string | null;
-  seller?: string | null;
   shipping_cost_cents?: number | null;
-  shipping_speed?: string | null;
-  ships_from?: string | null;
-  return_policy?: string | null;
+  // Dynamic attributes extracted based on intake spec categories.
+  // Fields like condition, seller, return_policy, etc. live here now
+  // instead of at the top level.
+  spec_attrs?: Record<string, string | number | null>;
+  // Enrichment from OG meta / pipeline steps (not LLM-extracted)
   image_url?: string | null;
   description_summary?: string | null;
-  canonical_attrs?: Record<string, unknown>; // legacy
-  spec_attrs?: Record<string, string | number | null>;
   seller_rep?: string | null;
   known_issues?: string[];
   scam_score?: number;

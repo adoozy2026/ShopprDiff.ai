@@ -47,6 +47,20 @@ def _deal_breaker_text(spec: dict[str, Any]) -> str:
     return " ".join(parts).lower()
 
 
+def _finding_attr(finding: dict[str, Any], key: str) -> Any:
+    """Look for a key in the finding, falling back to spec_attrs.
+
+    Fields like return_policy or ships_from are now extracted dynamically into
+    spec_attrs rather than as top-level finding fields. This helper checks
+    both locations so scoring works with old and new finding shapes.
+    """
+    val = finding.get(key)
+    if val is not None:
+        return val
+    spec_attrs = finding.get("spec_attrs") or {}
+    return spec_attrs.get(key)
+
+
 def score_scam(finding: dict[str, Any], spec: dict[str, Any]) -> tuple[int, list[str]]:
     score = 0
     reasons: list[str] = []
@@ -65,13 +79,13 @@ def score_scam(finding: dict[str, Any], spec: dict[str, Any]) -> tuple[int, list
             )
 
     # 2. No return policy is a meaningful risk signal for used goods.
-    returns = (finding.get("return_policy") or "").lower()
+    returns = (_finding_attr(finding, "return_policy") or "").lower()
     if returns and ("no returns" in returns or returns.strip() in {"none", "final sale"}):
         score += 30
         reasons.append("no returns accepted")
 
     # 3. Ships-from country mismatch — a US-only spec hitting an overseas shipper.
-    ships_from = (finding.get("ships_from") or "").lower()
+    ships_from = (_finding_attr(finding, "ships_from") or "").lower()
     deal_breakers = _deal_breaker_text(spec)
     if ships_from and ("us" in deal_breakers or "united states" in deal_breakers):
         if not any(
